@@ -242,15 +242,24 @@
       let pn = counter(page).get().first()
       let prev = query(heading.where(level: 1).before(here()))
       set text(font: t.sans-font, size: 7.5pt, fill: t.muted, tracking: 0.04em)
-      if prev.len() > 0 {
-        // heading numbering이 none이라 counter는 0 — 실재 헤딩 수로 서수 산출
-        let idx = prev.len()
-        text(weight: "semibold", fill: t.brand, "CH " + numpad(idx))
-        h(2mm)
-        prev.last().body
-      }
-      h(1fr)
-      text(size: 8pt, weight: "bold", fill: t.brand, number-width: "tabular", str(pn))
+      set par(first-line-indent: 0em, justify: false, leading: 0.5em)
+      // 좌(유닛 라벨) · 우(쪽번호)를 고정 폭 칼럼으로 분리. 장 제목이 길면
+      // 한 줄에서 쪽번호와 만나 겹치거나 2행으로 흘러넘치던 구조를 제거했다.
+      let fw = t.trim.w - t.margin.left - t.margin.right
+      let pw = 12mm  // 쪽번호 칼럼(4자리 + 여유)
+      grid(columns: (fw - pw, pw), rows: (auto,),
+        if prev.len() > 0 {
+          context {
+            // heading numbering이 none이라 counter는 0 — 실재 헤딩 수로 서수 산출
+            let lab = "CH " + numpad(prev.len())
+            let lw = measure(text(weight: "semibold", lab)).width
+            text(weight: "semibold", fill: t.brand, lab)
+            h(2mm)
+            fit-trunc(prev.last().body, fw - pw - lw - 2mm - 2pt)
+          }
+        } else { [] },
+        align(right, text(size: 8pt, weight: "bold", fill: t.brand,
+          number-width: "tabular", str(pn))))
     },
     header: none,
   )
@@ -279,10 +288,16 @@
   }
   set heading(numbering: none)
 
+  // 인용: 좌측 세로바 없이 좌우 들여쓰기만으로 구분(단행본 관행).
+  // 위아래 여백은 격자 1행씩 — 기준선 격자를 깨지 않는다.
   show quote.where(block: true): it => block(
-    inset: (left: 1.2em, y: 0.3em),
-    stroke: (left: 2pt + t.brand.transparentize(50%)),
-    text(fill: t.ink.transparentize(15%), it.body))
+    inset: (left: 2em, right: 1em),
+    above: grid-pitch, below: grid-pitch,
+    {
+      set text(size: 0.95em, fill: t.ink.transparentize(15%))
+      set par(first-line-indent: 0em)
+      it.body
+    })
   // "하는 글"(조작 절차·항목)은 고딕 — 서술 명조와 서체로 역할 분리 (STYLE.md §정체성)
   set list(marker: ([•], [–]), indent: 0.5em)
   set enum(indent: 0.5em)

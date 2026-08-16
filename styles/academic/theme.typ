@@ -1,5 +1,5 @@
 // bookforge style: academic — 학술·논문형 (STYLE.md: 신국판 153×225, 1도+먹)
-#import "base.typ": default-tokens, keep-words, chapter-state
+#import "base.typ": default-tokens, keep-words, chapter-state, fit-trunc
 #import "base.typ" as base
 #let code-font = ((name: "DejaVu Sans Mono", covers: regex("[A-Za-z0-9]")), "Pretendard")
 
@@ -88,22 +88,37 @@
 }
 
 // ---- 정의·정리 박스 ----------------------------------------------------------
+// 학술서 관행인 **상하 먹 계선 + 라벨**. 색면(accent-tint 배경)과 좌측 세로바는
+// 쓰지 않는다 — 단행본·학술서 조판 관행이 아니고, 본문 무채색 비율(§9)도 깨뜨린다.
 #let bf-callout(kind: "info", title: none, body) = {
-  let label = if title != none { title } else if kind == "warn" { "유의" } else { "정리" }
+  // quote(= md2typ의 ::: quote / ::: pull)는 라벨을 붙이지 않는다 — 인용에 "정리"
+  // 라벨이 붙던 결함. 라벨이 별행으로 올라오면서 더 두드러진다.
+  let label = if title != none { title }
+    else if kind == "warn" { "유의" }
+    else if kind == "quote" { none }
+    else { "정리" }
   block(
     width: 100%, breakable: false,
-    fill: accent-tint, stroke: (left: 1.5pt + accent),
-    inset: (x: 8pt, y: 6pt), above: 5mm, below: 5mm,
+    // B4(주의/경고)는 상단 계선 1.2pt — book-anatomy §10
+    stroke: (top: (if kind == "warn" { 1.2pt } else { 0.6pt }) + ink,
+             bottom: 0.3pt + ink),
+    inset: (x: 0pt, top: 5pt, bottom: 6pt), above: 5mm, below: 5mm,
     {
       set text(size: 9.5pt)
       set par(leading: 6.5pt, first-line-indent: 0em)
-      text(font: TT.sans-font, weight: "semibold", size: 9.5pt, fill: accent, label)
-      h(1em)
+      if label != none {
+        text(font: TT.sans-font, weight: "semibold", size: 9pt, tracking: 0.05em,
+          fill: if kind == "warn" { rgb("#8C2B20") } else { ink }, label)
+        linebreak()
+      }
       body
     })
 }
 
-#let bf-stat(value, label) = bf-callout(title: "수치")[#strong(value) — #label]
+// 값·라벨은 굵기와 급수로 가른다 — 엠대시 구분자를 쓰지 않는다
+#let bf-stat(value, label) = bf-callout(title: "수치")[
+  #strong(value)#h(0.8em)#text(size: 9pt, fill: muted, label)
+]
 
 #let bf-fig(path, caption: none, source: none, width: 100%) = {
   // placement: bottom — 도해를 면 하단으로 부동시켜 본문이 면을 계속 채우게 한다.
@@ -177,7 +192,8 @@
     set par(leading: 4.5pt, first-line-indent: 0em)
     v(1fr)
     meta.title
-    if meta.at("subtitle", default: none) != none [ — #meta.subtitle]
+    // 부제는 별행 — 엠대시 연결 표기를 쓰지 않는다
+    if meta.at("subtitle", default: none) != none { linebreak(); meta.subtitle }
     linebreak()
     [#meta.at("date", default: "") 발행 · 지은이 #meta.at("author", default: "bookforge")]
     linebreak()
@@ -197,16 +213,17 @@
       // 장 시작 면(도비라)은 러닝헤드 생략
       let starts = query(heading.where(level: 1)).map(h => h.location().page())
       if prev.len() > 0 and not starts.contains(here().page()) {
-        set text(font: t.sans-font, size: 8.5pt, weight: "medium", fill: ink)
-        // 폭 초과 시 좌측 클립 금지 — 번호는 항상 보존, 제목 꼬리만 말줄임
-        let trunc(s, n) = {
-          let cs = s.clusters()
-          if cs.len() > n { cs.slice(0, n).join("") + "…" } else { s }
-        }
-        text(fill: accent, "제" + str(prev.len()) + "장")
-        h(2em)
-        trunc(bf-plain(prev.last().body), 18)
-        h(1fr)
+        // 러닝헤드 급수 = 본문 × 0.8 = 8pt (book-anatomy §8)
+        set text(font: t.sans-font, size: 8pt, weight: "medium", fill: ink)
+        // 전역 par(first-line-indent all:true)가 머릿말까지 1자 밀어내는 것을 차단
+        set par(first-line-indent: 0em, justify: false, leading: 0.5em)
+        // 좌(장) · 우(절)를 판면 폭의 고정 비율로 나눈 칼럼에 넣는다. 자수 기준
+        // 절단은 자폭 차이 탓에 폭을 보장하지 못해 두 텍스트가 한 줄에서 충돌했다
+        // (실측: 106mm 판면에서 2행으로 흘러넘침). 이제 각 칼럼 안에서
+        // fit-trunc가 **실측 폭** 기준으로 말줄임하므로 겹침이 구조적으로 불가능하다.
+        let fw = t.trim.w - t.margin.left - t.margin.right  // 판면 폭 106mm
+        let lw = fw * 0.58
+        let rw = fw * 0.38
         // 우측: 현재 장 안에서 진행 중인 절만 (경계 오류 방지 — 이전 장 절 참조 금지,
         // 현재 면에서 시작한 절 포함, 절이 없으면 항목 생략)
         let ch-pg = prev.last().location().page()
@@ -214,10 +231,24 @@
           let sp = s.location().page()
           sp >= ch-pg and sp <= here().page()
         })
-        if secs.len() > 0 {
-          text(fill: muted, str(prev.len()) + "." + str(secs.len()) + " " +
-            trunc(bf-plain(secs.last().body), 14))
-        }
+        grid(columns: (lw, 1fr, rw), rows: (auto,),
+          context {
+            // 번호는 항상 보존, 제목 꼬리만 말줄임
+            let pre = "제" + str(prev.len()) + "장"
+            let pw = measure(text(fill: accent, pre)).width
+            text(fill: accent, pre)
+            h(10pt)
+            fit-trunc(bf-plain(prev.last().body), lw - pw - 12pt)
+          },
+          [],
+          if secs.len() > 0 {
+            align(right, context {
+              let num = str(prev.len()) + "." + str(secs.len()) + " "
+              let nw = measure(text(fill: muted, num)).width
+              text(fill: muted, num)
+              text(fill: muted, fit-trunc(bf-plain(secs.last().body), rw - nw - 2pt))
+            })
+          } else { [] })
         v(1.5mm)
         line(length: 100%, stroke: 0.4pt + rule-c)
       }
@@ -237,19 +268,23 @@
     let p = n.pos()
     if p.len() >= 2 { p.slice(1).map(str).join(".") } else { none }
   })
+  // 표제 위아래 여백은 행송(17.5pt)의 배수 — book-anatomy §6.3/§6.4
+  // 절(H2) 위 2행(35pt) + 아래 1행(17.5pt), 항(H3) 위 1.5행(26.25pt) + 아래 0.5행(8.75pt).
+  // 종전 값(H2 아래 8.75pt / H3 아래 5pt)은 par spacing 7.5pt에 흡수돼 제목이
+  // 본문에 붙어 보였다.
   show heading.where(level: 2): it => {
-    v(26.25pt, weak: true)
+    v(35pt, weak: true)
     block(sticky: true, text(font: t.sans-font, size: 11.5pt, weight: "semibold", fill: ink, {
       counter(heading).display((..n) => str(chapter-state.get().num) + "." + str(n.pos().at(1, default: 1)))
       h(1.5em)
       it.body
     }))
-    v(8.75pt, weak: true)
+    v(17.5pt, weak: true)
   }
   show heading.where(level: 3): it => {
-    v(17.5pt, weak: true)
+    v(26.25pt, weak: true)
     block(sticky: true, text(font: t.sans-font, size: 10.5pt, weight: "medium", fill: ink, it.body))
-    v(5pt, weak: true)
+    v(8.75pt, weak: true)
   }
 
   show quote.where(block: true): it => block(
@@ -294,29 +329,48 @@
   if toc {
     // 앞붙이 쪽번호(i, ii, iii…) · 러닝헤드 없음
     counter(page).update(1)
-    // 목차 1행 = 번호칼럼 14mm + 제목 + flex 공백 + 쪽번호 9mm(우측). 리더 점선 없음.
-    // 행송 16pt: em 박스가 1em으로 고정(top-edge .8em / bottom-edge -.2em)돼 있으므로
-    // 블록 간격 6pt + 본문 10pt = 16pt, 되돌이 줄도 leading 6pt로 같은 행송을 쓴다.
-    // bottom-edge: "baseline" — 칼럼 박스의 아래끝을 베이스라인에 맞춘다.
-    // (전역 em 박스 고정(bottom-edge -0.2em) 탓에 그냥 두면 박스가 2pt 떠서
-    //  번호·쪽번호 베이스라인이 제목과 어긋나고 행송도 16 → 18pt로 벌어진다.)
+    // 목차 1행 = [들여쓰기] + 번호칼럼 14mm + 제목(1fr) + 쪽번호 9mm(우측).
+    // 리더 점선 없음. 행송 16pt: em 박스가 1em으로 고정(top-edge .8em /
+    // bottom-edge -.2em)돼 있으므로 블록 간격 6pt + 본문 10pt = 16pt,
+    // 되돌이 줄도 leading 6pt로 같은 행송을 쓴다.
+    //
+    // **구조를 grid로 두는 이유(회귀 방지)**: 종전 구현은 한 문단 안에서
+    // `h(indent)` + 번호 박스 + 제목 + `h(1fr)` + 쪽번호 박스를 늘어놓고
+    // 되돌이 줄을 `hanging-indent`로 당겼다. 그런데 `h(1fr)`이 낀 문단에서는
+    // 되돌이 줄이 hanging-indent를 잃고 **판면 왼쪽 끝까지 탈출한다**(실측:
+    // 40자 장 제목의 둘째 줄이 번호 칼럼 밖으로 나가고, tocgate G14-A가
+    // 그 행의 쪽번호를 못 찾아 FAIL). 칼럼을 grid로 만들면 되돌이 줄이
+    // 제목 셀 안에 머무는 것이 **문단 설정이 아니라 구조**가 된다.
+    //
+    // 정렬: 세 칼럼 모두 top — 번호·제목·쪽번호가 **첫 줄에서** 베이스라인을 맞춘다.
+    // (쪽번호를 bottom으로 두어 마지막 줄에 붙이면 tocgate G14-A가 제목 첫 줄과
+    //  y가 겹치는 숫자 스팬만 쪽번호로 인정하므로 2행 제목에서 FAIL한다 —
+    //  tocgate.py:144-151. 항목의 시작 줄에 쪽번호를 다는 편이 목차 관행에도 맞다.)
+    // 세 텍스트 모두 전역 em 박스(top .8em / bottom -.2em)를 그대로 쓴다.
     // fill을 text()로 직접 박는 이유: 전역 `show link: 별색` 규칙을 안쪽에서 덮기 위함.
     let toc-row(loc, indent: 0mm, num: none, num-font: none, num-fill: ink,
                 title: none, page-no: none,
                 size: 10pt, weight: "regular", above: 6pt, sticky: false) = block(
       width: 100%, above: above, below: 0pt, sticky: sticky,
       {
-        set par(first-line-indent: 0em, hanging-indent: indent + 14mm,
+        set par(first-line-indent: 0em, hanging-indent: 0em,
           leading: 16pt - size, spacing: 0pt, justify: false)
-        if indent > 0mm { h(indent) }
-        link(loc, box(width: 14mm, text(font: num-font, size: size, fill: num-fill,
-          weight: weight, bottom-edge: "baseline",
-          number-type: "lining", number-width: "tabular", num)))
-        link(loc, text(font: t.sans-font, size: size, weight: weight, fill: ink, title))
-        h(1fr)
-        link(loc, box(width: 9mm, align(right,
-          text(font: t.body-font, size: size - 0.5pt, fill: ink, bottom-edge: "baseline",
-            number-type: "lining", number-width: "tabular", page-no))))
+        grid(
+          columns: (indent, 14mm, 1fr, 9mm),
+          rows: (auto,),
+          align: (left + top, left + top, left + top, right + top),
+          [],
+          // box로 감싸 번호가 14mm를 넘어도(제10장 등) 셀 안에서 줄바꿈되지 않게 한다
+          link(loc, box(text(font: num-font, size: size, fill: num-fill,
+            weight: weight, number-type: "lining", number-width: "tabular", num))),
+          link(loc, text(font: t.sans-font, size: size, weight: weight, fill: ink, title)),
+          // 쪽번호는 제목보다 0.5pt 작다 → top-edge 0.8em 차이만큼(0.8×0.5=0.4pt)
+          // 어센트가 짧아 그냥 top 정렬하면 베이스라인이 0.4pt 위로 뜬다(실측).
+          // 셀 상단 inset으로 정확히 상쇄한다.
+          grid.cell(inset: (top: 0.4pt),
+            link(loc, text(font: t.body-font, size: size - 0.5pt, fill: ink,
+              number-type: "lining", number-width: "tabular", page-no))),
+        )
       })
     page(
       header: none,

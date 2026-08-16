@@ -39,6 +39,47 @@
   } else { it }
 }
 
+// ---- 평문 추출 --------------------------------------------------------------
+// content(제목 본문 등)에서 렌더 가능한 평문만 뽑는다. 폭 실측·말줄임의 전제.
+#let plain-text(c) = {
+  if c == none { "" }
+  else if type(c) == str { c }
+  else if c == [ ] { " " }
+  else if type(c) == content {
+    if c.has("text") { c.text }
+    else if c.has("children") { c.children.map(plain-text).fold("", (a, b) => a + b) }
+    else if c.has("body") { plain-text(c.body) }
+    else { "" }
+  } else { str(c) }
+}
+
+// ---- 폭 실측 말줄임 ---------------------------------------------------------
+// 자수가 아니라 **실제 렌더 폭**을 기준으로 자른다. measure()로 폭을 재며
+// 이분탐색으로 `width`에 들어가는 최대 길이를 찾고 "…"를 붙인다.
+// (자수 기준 절단은 한글·라틴·숫자의 자폭 차이 때문에 폭을 보장하지 못한다 —
+//  러닝헤드 좌우 텍스트가 한 줄에서 충돌하던 결함의 근본 원인.)
+// 호출 위치의 text 스타일(서체·급수·자간)이 실측에 그대로 반영되므로
+// `set text(...)` 이후에 부를 것.
+#let fit-trunc(s, width) = context {
+  let txt = plain-text(s)
+  if txt == "" {
+    // 빈 문자열 — 아무것도 그리지 않는다
+  } else if measure(txt).width <= width {
+    txt
+  } else {
+    let cs = txt.clusters()
+    // P(n) = (앞 n자 + "…")가 width 이내 — n에 대해 단조. 최대 n을 이분탐색.
+    let lo = 0
+    let hi = cs.len()
+    while lo < hi {
+      let mid = int((lo + hi + 1) / 2)
+      if measure(cs.slice(0, mid).join("") + "…").width <= width { lo = mid }
+      else { hi = mid - 1 }
+    }
+    if lo <= 0 { "…" } else { cs.slice(0, lo).join("").trim(at: end) + "…" }
+  }
+}
+
 // ---- full-bleed helper ------------------------------------------------------
 // Draws content covering the whole trim, ignoring page margins.
 #let full-bleed(t, body) = {
@@ -69,7 +110,8 @@
         full-bleed(t, block(fill: t.brand, width: 100%, height: 100%, inset: (x: t.margin.left, y: t.margin.top), {
           set text(fill: white, font: t.display-font)
           v(8%)
-          text(size: 64pt, weight: "black", str(n).pad(2, "0", start: true))
+          // str에는 pad 메서드가 없다(typst 0.14) — 2자리 0채움은 직접 만든다
+          text(size: 64pt, weight: "black", if n < 10 { "0" + str(n) } else { str(n) })
           v(2em)
           text(size: 24pt, weight: "bold", keep-words(title))
           if summary != none {
@@ -89,20 +131,30 @@
 
 // ---- callout boxes ----------------------------------------------------------
 // kinds: info / tip / warn / quote / stat  — themes may restyle via show rules
+// 문법: 상하 계선 + 라벨 행. 옅은 배경 + 좌측 세로바(박스형 콜아웃)는 쓰지 않는다
+// — 단행본 관행이 아니고 생성물 티가 나는 패턴이라 전권에서 제거했다.
+// 종류 구분은 색면이 아니라 **라벨 문자열과 라벨 색**이 진다.
 #let callout(kind: "info", title: none, t: (:), body) = {
   let t = merged(t)
-  let bg = if kind == "warn" { rgb("#fdf0ec") } else { t.brand-light }
-  let bar = if kind == "warn" { rgb("#c0392b") } else { t.brand }
+  let lc = if kind == "warn" { rgb("#c0392b") } else { t.brand }
+  let label = if title != none { title }
+    else if kind == "warn" { "유의" }
+    else if kind == "tip" { "요령" }
+    else if kind == "quote" { none }
+    else { "정리" }
   block(
-    width: 100%, breakable: false,
-    fill: bg, radius: 4pt, inset: (x: 11pt, y: 10pt),
-    stroke: (left: 2.5pt + bar),
+    width: 100%, breakable: false, above: 1.2em, below: 1.2em,
+    // B4(주의/경고)는 상단 계선을 1.2pt로 굵혀 위계를 준다 — book-anatomy §10
+    stroke: (top: (if kind == "warn" { 1.2pt } else { 0.6pt }) + t.ink,
+             bottom: 0.3pt + t.ink),
+    inset: (x: 0pt, top: 7pt, bottom: 8pt),
     {
       // 박스 내부는 본문 격자(문단 간 1행 공백)를 따르지 않는다 — 밀착 리듬
       set par(spacing: 0.8em, first-line-indent: 0em)
-      if title != none {
-        text(font: t.sans-font, weight: "semibold", size: 9pt, fill: bar, title)
-        v(4pt)
+      if label != none {
+        text(font: t.sans-font, weight: "semibold", size: 8.5pt,
+          tracking: 0.04em, fill: lc, label)
+        v(3.5pt)
       }
       set text(size: 0.95em)
       body
@@ -197,7 +249,8 @@
     line(length: 30%, stroke: 0.5pt + t.muted)
     v(6pt)
     text(size: 9.5pt, fill: t.ink, weight: "semibold", meta.title)
-    if "subtitle" in meta and meta.subtitle != none [ — #meta.subtitle]
+    // 부제는 별행 — 제목·부제를 엠대시로 잇는 표기는 쓰지 않는다
+    if "subtitle" in meta and meta.subtitle != none { linebreak(); meta.subtitle }
     linebreak()
     if "author" in meta [지은이 #meta.author]
     linebreak()
@@ -251,10 +304,19 @@
       let sel = heading.where(level: 1)
       let prev = query(sel.before(here()))
       if prev.len() > 0 {
+        // 좌(장 제목) · 우(책 제목)를 **고정 폭 칼럼**으로 나눈다. 가변 길이 텍스트
+        // 둘이 한 줄에서 만나 겹치거나 2행으로 흘러넘치던 구조를 제거한 것 —
+        // 각 칼럼은 fit-trunc가 실측 폭 기준으로 말줄임하므로 충돌이 불가능하다.
         set text(font: t.sans-font, size: 7.5pt, fill: t.muted, tracking: 0.06em)
-        prev.last().body
-        h(1fr)
-        text(fill: t.brand, meta.at("title", default: ""))
+        set par(first-line-indent: 0em, justify: false, leading: 0.5em)
+        let fw = t.trim.w - t.margin.left - t.margin.right
+        let lw = fw * 0.58
+        let rw = fw * 0.38
+        grid(columns: (lw, 1fr, rw), rows: (auto,),
+          fit-trunc(prev.last().body, lw - 2pt),
+          [],
+          align(right, text(fill: t.brand,
+            fit-trunc(meta.at("title", default: ""), rw - 2pt))))
       }
     },
   )
@@ -267,7 +329,7 @@
   show heading.where(level: 2): it => {
     v(1.6em, weak: true)
     block(sticky: true, text(font: t.sans-font, size: t.heading2-size, weight: "bold", fill: t.ink, it.body))
-    v(0.7em, weak: true)
+    v(1.0em, weak: true)  // 제목-본문 밀착 방지: 아래 여백은 최소 1행분 확보
   }
   show heading.where(level: 3): it => {
     v(1.2em, weak: true)
@@ -276,15 +338,19 @@
       h(6pt)
       text(font: t.sans-font, size: t.heading3-size, weight: "semibold", fill: t.ink, it.body)
     })
-    v(0.5em, weak: true)
+    v(0.75em, weak: true)  // 제목-본문 밀착 방지
   }
   set heading(numbering: none)
 
   // quotes / lists / code / tables
+  // 인용: 좌측 세로바 없이 좌우 들여쓰기만으로 구분한다(단행본 관행).
   show quote.where(block: true): it => block(
-    inset: (left: 1.2em, y: 0.3em),
-    stroke: (left: 2pt + t.brand.transparentize(50%)),
-    text(fill: t.ink.transparentize(15%), it.body))
+    inset: (left: 2em, right: 1em), above: 1em, below: 1em,
+    {
+      set text(size: 0.95em, fill: t.ink.transparentize(15%))
+      set par(first-line-indent: 0em)
+      it.body
+    })
   set list(marker: ([•], [–]), indent: 0.5em)
   set enum(indent: 0.5em)
   show raw.where(block: true): it => block(

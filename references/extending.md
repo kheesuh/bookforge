@@ -22,6 +22,14 @@ base의 `book()`을 그대로 쓰거나(practical처럼 토큰만 교체), 완�
 
 주의: 문단 간격을 0으로 쓰는 스타일은 `list/enum spacing`과 블록 above/below를 반드시 명시하라 — 기본값 상속 시 줄겹침이 난다.
 
+주의: 표의 `columns`를 테마에서 `set table(columns: …)`로 재설정하지 말 것. 컬럼 폭은 md2typ가 셀 내용 비례 가중 fr로 산출해 내보낸다 — 테마가 덮으면 에러 없이 균등폭으로 되돌아가는 조용한 회귀가 된다. 테마는 표의 stroke·inset·text만 손댄다.
+
+주의: 콜아웃·인용에 좌측 세로 바(`stroke: (left: …)`, `border-left`) 디자인을 쓰지 말 것 — 전 스타일에서 폐지된 패턴이다(기계 생성물 지문, references/copyediting.md §6). 상하 계선·라벨 행·들여쓰기 문법을 쓴다. 위계는 색면이 아니라 계선 굵기(기본 0.6pt / warn 1.2pt)와 라벨이 진다(book-anatomy §10).
+
+주의: 러닝헤드·러닝푸터는 **고정 폭 칼럼(grid) + `fit-trunc`(base.typ, 폭 실측 말줄임)** 조합으로 만든다. 말줄임만으로는 겹침이 안 막히고 칼럼만으로는 글자가 잘린다. `fit-trunc`는 `context` 안, 해당 `set text(...)` **이후**에 호출해야 실측이 맞는다. 가변 길이 텍스트 둘을 `h(1fr)`로 한 줄에 늘어놓는 구조는 금지 — 긴 제목에서 2행 흘러넘침이 재발한다. 수정 후에는 `tests/hdr_check.py <pdf> <band_mm> <left_mm> <right_mm> [--footer]`로 겹침·판면 이탈·다중행을 검사하라(게이트가 못 잡는 결함 클래스다).
+
+주의: 목차 행을 한 문단 + `h(1fr)` + hanging-indent로 만들지 말 것 — 되돌이 줄이 판면 왼쪽 끝으로 탈출한다(에러 없는 시각 퇴화). academic의 `toc-row`처럼 grid 칼럼 구조를 쓴다.
+
 ## HTML 테마 계약
 
 `theme.html`은 python `string.Template` — `$title $subtitle $author $date $brand $cover_art $toc $body $css` + `$tocmap`(magazine 목차 이미지 맵) `$backquote`(뒤표지 인용) 플레이스홀더. `$` 문자를 리터럴로 쓰려면 `$$`. css 쪽 플레이스홀더는 `$fonts_dir $key_color $key_tint`.

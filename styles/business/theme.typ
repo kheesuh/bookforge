@@ -1,5 +1,5 @@
 // bookforge style: business — 비즈니스·컨설팅 리포트 (STYLE.md: 200×280, navy 시스템)
-#import "base.typ": default-tokens, keep-words, numpad, chapter-state, full-bleed
+#import "base.typ": default-tokens, keep-words, numpad, chapter-state, full-bleed, fit-trunc
 #import "base.typ" as base
 #let code-font = ((name: "DejaVu Sans Mono", covers: regex("[A-Za-z0-9]")), "Pretendard")
 
@@ -227,8 +227,11 @@
 // ---- 콜아웃: 인사이트 박스 / 인용 박스 / alert ------------------------------
 #let bf-callout(kind: "info", title: none, body) = {
   if kind == "quote" {
-    block(breakable: false, inset: (left: 6mm),
-      stroke: (left: 3pt + navy-500), {
+    // 임원 코멘트: 좌측 세로 룰 대신 **상하 네이비 계선**. 좌측 세로바 + 색면은
+    // 전 팩에서 제거한 패턴이라, business 정체성(네이비 계선 시스템)으로 대체한다.
+    block(breakable: false, width: 100%, above: 6mm, below: 6mm,
+      inset: (x: 0pt, top: 4mm, bottom: 4.5mm),
+      stroke: (top: 1.2pt + navy-700, bottom: 0.4pt + navy-100), {
         set text(font: TT.quote-font, size: 13pt, fill: navy-900)
         set par(leading: 0.62em, first-line-indent: 0em)
         body
@@ -320,11 +323,24 @@
       let prev = query(heading.where(level: 1).before(here()))
       if prev.len() > 0 {
         set text(font: t.sans-font, size: 8pt, tracking: 0.06em, fill: ink-60)
+        set par(first-line-indent: 0em, justify: false, leading: 0.5em)
+        // 좌(장번호+장 제목) · 우(보고서 제목)를 고정 폭 칼럼으로 분리한다.
+        // 둘 다 가변 길이라 h(1fr) 한 줄 구조에서는 긴 제목끼리 만나면 겹치거나
+        // 2행으로 흘러넘친다 — 칼럼 폭 + fit-trunc 실측 말줄임으로 구조적으로 차단.
+        let fw = t.trim.w - t.margin.left - t.margin.right
+        let lw = fw * 0.58
+        let rw = fw * 0.38
         let n = chapter-state.get().num
-        if n > 0 { numpad(n); h(0.6em) }  // 좌측 = {장번호} {장 제목}
-        prev.last().body
-        h(1fr)
-        meta.at("title", default: "")
+        grid(columns: (lw, 1fr, rw), rows: (auto,),
+          context {
+            let pre = if n > 0 { numpad(n) } else { "" }
+            let pw = if pre == "" { 0pt } else { measure(pre).width }
+            if pre != "" { pre; h(0.6em) }
+            // 0.6em(4.8pt) + 여유 2pt
+            fit-trunc(prev.last().body, lw - pw - 7pt)
+          },
+          [],
+          align(right, fit-trunc(meta.at("title", default: ""), rw - 2pt)))
         v(1.2mm)  // 베이스라인(판면 -8mm)과 헤어라인(-6mm) 간격 2mm — 디센트 0.6mm 감안
         line(length: 100%, stroke: 0.4pt + rule-c)
       }

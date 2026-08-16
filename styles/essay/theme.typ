@@ -138,7 +138,8 @@
     set par(leading: 5pt, spacing: 5pt, first-line-indent: 0em)
     v(1fr)
     meta.title
-    if meta.at("subtitle", default: none) != none [ — #meta.subtitle]
+    // 부제는 별행 — 엠대시 연결 표기를 쓰지 않는다
+    if meta.at("subtitle", default: none) != none { linebreak(); meta.subtitle }
     linebreak()
     [초판 1쇄 발행 #meta.at("date", default: "")]
     linebreak()
@@ -186,11 +187,11 @@
   }
   set heading(numbering: none)
 
-  // 인용문: 블록 인용, 배경 없음, accent-tint 헤어라인
+  // 인용문: 블록 인용, 배경 없음, 괘선 없음 — 여백만으로 구분한다(에세이 정체성).
+  // 좌측 세로 헤어라인은 제거했다(좌측 세로바 패턴 전권 금지).
   show quote.where(block: true): it => {
     v(7mm, weak: true)
-    block(inset: (left: 6mm, right: 4mm),
-      stroke: (left: 0.4pt + t.brand.transparentize(70%)),
+    block(inset: (left: 8mm, right: 6mm),
       {
         set text(size: 9.5pt, fill: t.ink-soft)
         set par(leading: 0.78em, spacing: 0.7em, first-line-indent: 0em)

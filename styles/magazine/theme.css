@@ -114,8 +114,9 @@ body {
   margin: 10.8mm 0 5.4mm; }
 .chapter-body h3 { font-size: 11pt; font-weight: 700; margin: 5.4mm 0 2.7mm; }
 .chapter-body ul, .chapter-body ol { margin: 0 0 5.4mm 5mm; }
+/* 인용: 좌측 세로바 없이 들여쓰기만으로 구분 — 매거진 문법(좌측 바 금지) */
 .chapter-body blockquote { font-family: var(--serif); font-size: 12.5pt; line-height: 1.55;
-  color: var(--ink-soft); border-left: 3pt solid var(--key); padding-left: 6mm; margin: 5.4mm 0; }
+  color: var(--ink-soft); padding: 0 4mm 0 8mm; margin: 5.4mm 0; }
 .chapter-body table { width: 100%; border-collapse: collapse; font-size: 8.5pt; margin: 5.4mm 0;
   break-inside: avoid; }
 .chapter-body th { border-top: 1.5pt solid var(--ink); border-bottom: 0.5pt solid var(--ink);
