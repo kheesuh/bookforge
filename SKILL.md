@@ -81,6 +81,7 @@ python3 <SKILL>/scripts/scaffold.py <book_dir> --style practical \
 종류 `info|tip|warn|quote|stat|pull`(pull은 magazine 풀퀘트 — **본문에 실재하는 문장만**, 없는 인용은 G10 하드 실패).
 - 표 캡션: 표 **바로 앞 문단**에 `[표] 제목 | 자료: 출처` 한 줄 — 이 줄을 준 표만 번호 라벨이 붙는다. 캡션 없는 표는 라벨 없이 렌더된다(자동 필러 캡션은 존재하지 않는다).
 - `stat`의 수치는 같은 장 본문에 실재해야 한다(G10) — 박스에만 있는 숫자는 날조로 판정된다.
+- 문장·표기(G16, 정본 [references/copyediting.md](references/copyediting.md)): 엠대시(—) 원칙 금지 — 삽입구는 괄호·쉼표, 범위는 ~, 장당 4개부터 FAIL. 한글 문장 속 영문 용어는 첫 글자 대문자(고유명사는 공식 표기, 명령·코드는 코드체 원형). 퀴즈·보기·단계 나열은 리스트 항목으로만 — 한 문단 인라인 나열(원문자 3개 이상)은 줄바꿈되지 않아 FAIL.
 
 표지·도비라용 생성 아트를 쓸 경우 [references/art-policy.md](references/art-policy.md)를 읽고 따른다(무텍스트 원칙).
 
@@ -93,7 +94,7 @@ python3 <SKILL>/scripts/build.py <book_dir>          # → draft/book.pdf
 python3 <SKILL>/scripts/qc_gate.py <book_dir>        # PASS 시에만 final/<slug>.pdf 생성
 ```
 
-게이트: G10 인용·수치 실재(렌더 전) / G0 도해 SVG 소스(렌더 전 — foreignObject·외부참조·단독문단·아이콘 탈락) / G1 렌더·판형(tokens `trim_mm` 대조)·분량범위(WARN — `--strict-pages`만 HARD) / G2 폰트 임베드+Type3 0 / G3 오버플로 0 / G4 목차·북마크 정합 / G7 밀도(백면·꼬리 채움·판면 드리프트) / G8 공기 채움 / G9 제목 고립·widow / G11 사유 코드 무결성 / G12 필러 백면 / G13 도해 라벨 PDF 실재 / G14 목차·디자인 정합(인쇄 목차 쪽번호↔폴리오·목차↔도비라 색 계열·텍스트 대비 하한). 기준 수치와 대응법은 [references/pagination.md](references/pagination.md)가 정본이다.
+게이트: G10 인용·수치 실재(렌더 전) / G16 표기 — 엠대시·인라인 보기(렌더 전, 기준 references/copyediting.md) / G0 도해 SVG 소스(렌더 전 — foreignObject·외부참조·단독문단·아이콘 탈락) / G1 렌더·판형(tokens `trim_mm` 대조)·분량범위(WARN — `--strict-pages`만 HARD) / G2 폰트 임베드+Type3 0 / G3 오버플로 0 / G4 목차·북마크 정합 / G7 밀도(백면·꼬리 채움·판면 드리프트) / G8 공기 채움 / G9 제목 고립·widow / G11 사유 코드 무결성 / G12 필러 백면 / G13 도해 라벨 PDF 실재 / G14 목차·디자인 정합(인쇄 목차 쪽번호↔폴리오·목차↔도비라 색 계열·텍스트 대비 하한). 기준 수치와 대응법은 [references/pagination.md](references/pagination.md)가 정본이다.
 
 실패 시 `gate-report.json`의 원인 항목만 고치고 재실행한다. **금지 대응**: 분량 미달을 부록·용어집 추가로 메우기, 절별 강제 개면, 빈 줄·행간 확대로 면 채우기 — 전부 게이트가 다시 잡는다. 올바른 대응: G7 꼬리 미달은 `python3 <SKILL>/scripts/refit.py <book_dir>`(자간 미세조정 자동 탐색) → 해 없으면 문단 1~2개 국소 증감 또는 `pageroles.json` 사유 코드(의도된 여백 선언, G11이 진위 검증). 같은 게이트 3회 연속 실패면 원인을 사용자에게 보고한다.
 
@@ -112,6 +113,7 @@ python3 <SKILL>/scripts/contact_sheet.py <book_dir>/final/*.pdf <book_dir>/qc --
 - [modes/manuscript.md](modes/manuscript.md) — 원고를 받았을 때: 인제스트·장 분할 절차
 - [references/pagination.md](references/pagination.md) — **배치 규칙서(정본)**: 채움/비움의 사유, 레버 사다리, 밀도 게이트 수치, 사유 코드
 - [references/art-policy.md](references/art-policy.md) — 생성 아트(표지·도비라) 규칙: 무텍스트 원칙, 스타일별 사용처
+- [references/copyediting.md](references/copyediting.md) — **교정교열 정본**: 문장부호·영문 표기·퀴즈 문법·한국어 교열 체크리스트, G16 기준
 - [references/orchestration.md](references/orchestration.md) — (Claude Code 전용, 선택) 장별 집필을 codex 스웜·서브에이전트로 병렬화하는 법
 - [references/extending.md](references/extending.md) — 새 스타일 팩 추가·테마 수정 가이드
 - `styles/<이름>/STYLE.md` — 각 스타일의 전체 디자인 규칙서(집필 시 톤·구성 참고)

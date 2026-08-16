@@ -20,6 +20,8 @@ Gates (pagination.md §7):
   G12 parity  : 장 시작 직전 필러 백면 (단면 전자책에 인쇄 관습 금지)
   G14 toc     : (tocgate.py) A 인쇄 목차 쪽번호↔폴리오 자기일관 / B 목차↔도비라
                 색상(hue) 정합 / C 텍스트 배경 대비 WCAG 하한(대형 3:1, 그 외 4.5:1)
+  G16 notation: (렌더 전) 한 문단 인라인 보기 나열(①②③·1)2)3))·엠대시 남용 —
+                표기 규범(references/copyediting.md), 엠대시 1~3은 WARN
 Writes <book_dir>/gate-report.json. On PASS copies draft/book.pdf -> final/<slug>.pdf.
 Exit 0 = PASS, 1 = FAIL. (G6 visual judgement is the agent's job on the contact sheet.)
 """
@@ -174,6 +176,136 @@ def g15_drought_check(pages, page_texts, first_ch, structural, style):
     return problems
 
 
+# ---- G16 표기 규범 (렌더 전 md 검사 — references/copyediting.md) ----
+# 이 블록은 .claude/skills/bf-produce/scripts/run_swarm.py의 validate()와 **같은 규칙**
+# 이어야 한다. 갈라지면 스웜은 통과시키고 게이트는 반려하는 교착이 생긴다 —
+# 정규식·임계값 변경은 반드시 양쪽 동시에.
+# CommonMark 코드 펜스: ```/~~~ 3개 이상, 0~3칸 들여쓰기, 닫는 펜스는 같은 종류·같은 길이 이상
+G16_FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})[^\n]*\n(?:.*?^ {0,3}\1[`~]*[ \t]*$|.*\Z)",
+                          re.M | re.S)
+G16_INLINE_CODE_RE = re.compile(r"`[^`\n]+`")
+# 원문자 전 계열: ①-⑳·⑴-⒇·⒈-⒛·⒜-⒵·Ⓐ-Ⓩ·ⓐ-ⓩ·⓪-⓿ (U+2460~24FF) + 한글 ㉠-㉻ (U+3260~327B)
+G16_CIRCLED_RE = re.compile(r"[①-⓿㉠-㉻]")
+G16_PAREN_ENUM_RE = re.compile(r"(?<!\()\b\d{1,2}\)")
+G16_LIST_ITEM_RE = re.compile(r"^(?:[-*+]|\d{1,2}[.)])\s")
+G16_TABLE_DELIM_RE = re.compile(r"^[\s:|-]+$")
+G16_EMDASH = "—"
+G16_EMDASH_MAX = 3
+G16_INLINE_OPTION_MSG = ("보기·선택지는 리스트 항목(- 또는 1.)으로 분리하라 "
+                         "— 인라인 나열은 조판에서 줄바꿈되지 않는다")
+
+
+def _g16_prose(raw):
+    """코드블록·인라인코드를 뺀 산문 — run_swarm.strip_code()와 동일 정규식."""
+    return G16_INLINE_CODE_RE.sub("", G16_FENCE_RE.sub("", raw))
+
+
+def _g16_enum_count(s):
+    """'N)' 나열 수 — 열린 괄호 안의 숫자는 제외('(주 3) 참고'는 참조 표기)."""
+    n = 0
+    for m in G16_PAREN_ENUM_RE.finditer(s):
+        pre = s[:m.start()]
+        if pre.count("(") - pre.count(")") > 0:
+            continue
+        n += 1
+    return n
+
+
+def _g16_option_count(s):
+    return max(len(G16_CIRCLED_RE.findall(s)), _g16_enum_count(s))
+
+
+def _g16_table_line_idx(lines):
+    """블록 안 GFM 표 영역의 줄 인덱스 — 구분행 기준 위 1행(헤더)과 아래 연속 행.
+    선행 `|`는 GFM 표의 조건이 아니다 — 구분행이 없으면 `|`로 시작해도 산문이다."""
+    idx = set()
+    for i, s in enumerate(lines):
+        if "|" not in s or "-" not in s or not G16_TABLE_DELIM_RE.match(s):
+            continue
+        idx.add(i)
+        if i:
+            idx.add(i - 1)
+        j = i + 1
+        while j < len(lines) and "|" in lines[j]:
+            idx.add(j)
+            j += 1
+    return idx
+
+
+def g16_inline_option_lines(prose):
+    """조판에서 한 덩어리로 접히는 보기 나열 (copyediting.md §4).
+
+    마크다운은 문단 안 단일 줄바꿈을 공백으로 접으므로, 줄이 아니라 **문단**
+    단위로 합산한다. 정상 조판되는 리스트 항목·표 영역은 합산에서 빼되,
+    한 항목 안에 보기가 3개면 그 항목 자체가 덩어리이므로 따로 잡는다.
+    """
+    hits = []
+    for block in re.split(r"\n\s*\n", prose):
+        lines = [l.strip() for l in block.splitlines()]
+        tbl = _g16_table_line_idx(lines)
+        plain = []
+        for i, s in enumerate(lines):
+            if not s or i in tbl:
+                continue  # 표 셀의 ①②③은 정상 조판 — 오탐 제외
+            if G16_LIST_ITEM_RE.match(s):
+                if _g16_option_count(s) >= 3:
+                    hits.append(s)
+                continue
+            plain.append(s)
+        joined = " ".join(plain)
+        if plain and _g16_option_count(joined) >= 3:
+            hits.append(joined)
+    return hits
+
+
+def g16_notation_check(book_dir, outline):
+    """장별 표기 검사 — HARD: 인라인 보기 나열 / 엠대시 >3. WARN: 엠대시 1~3."""
+    problems, warns = [], []
+    for ch in outline["chapters"]:
+        p = book_dir / "chapters" / ch["file"]
+        if not p.exists():
+            continue
+        prose = _g16_prose(p.read_text(encoding="utf-8"))
+        hits = g16_inline_option_lines(prose)
+        if hits:
+            problems.append(f"{ch['file']}: {G16_INLINE_OPTION_MSG} (위반 {len(hits)}곳: "
+                            + "; ".join(repr(h[:40]) for h in hits[:2]) + ")")
+        em = prose.count(G16_EMDASH)
+        if em > G16_EMDASH_MAX:
+            problems.append(f"{ch['file']}: 엠대시 남용({em}개) — 삽입구는 괄호·쉼표로, "
+                            "범위는 ~로 바꿔라")
+        elif em:
+            warns.append(f"{ch['file']}: 엠대시 {em}개 — 가능하면 줄여라")
+    return problems, warns
+
+
+# ---- G8-STRETCH 임계 (표제 여백은 구조적 공기 — 스타일 정본이 규정한 값이다) ----
+# HEAD_RATIO: 표제 판별. 구 1.3(=본문의 130%)은 academic H2 11.5pt(1.15)·practical
+#   H2 11.3pt(1.13)를 구조적으로 못 봤다 — 정본대로 준 표제 여백이 "공기 채움"으로
+#   오판됐다(실측: academic p10 gap 0.182·p13 0.191이 임계 0.18을 넘겨 FAIL, 정상 면
+#   p6은 0.179로 여유 0.001). 1.12는 그 둘을 잡고 academic H3 10.5pt(1.05)는 제외한다.
+# HEAD_BONUS 0.07: 표제 1개가 만드는 공기 실측 — academic 표제 진입/이탈 홀이 각각
+#   행송의 2.8배·2.2배(합 ≈ 5행 중 표제 1행 제외 ≈ 2행분), 판면 27행 기준 2/27 ≈ 0.074.
+# GAP_CAP 0.45: 표제가 많아도 무한정 열리지 않게. 구 business 상한(0.18+0.05*5=0.43)
+#   보다 위라 기존 통과 면을 새로 떨어뜨리지 않는다.
+# 표제가 0개인 면의 임계는 0.18 그대로다 — 진짜 공기 채움(행간 확대·빈 줄)은 표제
+# 가산을 못 받으므로 종전과 동일하게 잡힌다.
+G8_HEAD_RATIO = 1.12
+G8_GAP_BASE = 0.18
+G8_HEAD_BONUS = 0.07
+G8_GAP_CAP = 0.45
+
+
+def g8_gap_threshold(style, lines, body_size):
+    """(임계, 표제 행 수) — 표제 행 수에 비례해 허용 공기를 연다."""
+    heads = sum(1 for l in lines if l["size"] >= G8_HEAD_RATIO * body_size)
+    if style == "insight":
+        # insight는 H2 위 24mm(STYLE.md 정본)+와이드 콜아웃이 더 큰 구조적 공기를 만든다.
+        # 실측 픽스처가 없어 기왕의 식을 그대로 두고 상한도 걸지 않는다(현행 유지).
+        return 0.28 + 0.10 * max(0, heads - 1), heads
+    return min(G8_GAP_BASE + G8_HEAD_BONUS * heads, G8_GAP_CAP), heads
+
+
 def g0_svg_check(book_dir, outline):
     """렌더 전 도해 SVG 소스 검사 — Typst(usvg)는 foreignObject를 에러 없이 드롭하므로
     조용한 텍스트 전멸을 빌드 전에 차단한다."""
@@ -277,6 +409,14 @@ def main():
     report["gates"]["G15-PARA"] = {"problems": g15p, "ok": not g15p}
     if g15p:
         finish(book_dir, report, ["G15-PARA: " + p for p in g15p])
+
+    # ---- G16 (렌더 전 — 인라인 보기 나열·엠대시 남용은 원고 문제, 빌드 전에 잡는다) ----
+    g16, g16w = g16_notation_check(book_dir, outline)
+    report["gates"]["G16"] = {"problems": g16, "warns": g16w, "ok": not g16}
+    report["warns"].extend(f"G16: {w}" for w in g16w)
+    if g16:
+        finish(book_dir, report, ["G16: " + p for p in g16]
+               + ["G16: 기준: references/copyediting.md"])
 
     pdf = book_dir / "draft" / "book.pdf"
 
@@ -599,20 +739,13 @@ def main():
         if pg < first_ch or pg in structural or pg in tails or pg in role_by_page \
                 or pg in float_pushed:
             continue
-        # insight는 H2 위 여백 24mm(STYLE.md 정본)+와이드 콜아웃이 구조적 공기를 만든다 — 임계 완화.
-        # 한 면에 섹션 전환이 2회 이상이면 여백이 배로 쌓이므로 디스플레이 행 수 비례 가산.
-        gap_thr = 0.18
-        if style == "insight":
-            heads = sum(1 for l in p["_lines"] if l["size"] >= 1.3 * body_size)
-            gap_thr = 0.28 + 0.10 * max(0, heads - 1)
-        elif style == "business":
-            # 액션 타이틀(16pt + 전폭 룰 + 전후 v1.8/1.1em)과 키 스탯 디스플레이가
-            # 면당 ~10mm(≈0.045)의 구조적 공기를 만든다(실측 — p13 홀 스캔). 디스플레이
-            # 행 수에 비례해 가산, 디스플레이 없는 순본문 면은 0.18 그대로.
-            heads = sum(1 for l in p["_lines"] if l["size"] >= 1.3 * body_size)
-            gap_thr = 0.18 + 0.05 * heads
+        # 표제 여백은 스타일 정본이 규정한 구조적 공기다 — 표제 행 수에 비례해 임계를
+        # 연다(상수 근거는 G8_HEAD_* 주석). 표제 0개 면은 0.18 그대로라 진짜 공기
+        # 채움(행간 확대·빈 줄 삽입)은 종전과 똑같이 잡힌다.
+        gap_thr, heads = g8_gap_threshold(style, p["_lines"], body_size)
         if p["gap"] > gap_thr and p["lines"] < 0.8 * N:
-            g8["stretched"].append({"page": pg, "gap": p["gap"], "lines": p["lines"]})
+            g8["stretched"].append({"page": pg, "gap": p["gap"], "lines": p["lines"],
+                                    "heads": heads, "thr": round(gap_thr, 3)})
         # 행송 편차는 WARN만 — 두 엔진 모두 페이지 단위로 행송을 벌릴 능력이 없다(실측).
         # 리스트·코드·콜아웃 혼합 면의 자연 편차가 대부분이라 FAIL로 쓰면 오탐.
         if p["pitch"] and m["book_pitch"] and p["lines"] >= 10 and \

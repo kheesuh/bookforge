@@ -69,11 +69,21 @@ def _spans(page):
                     yield s
 
 
-def find_toc_pages(doc, titles, search_upto=7):
-    """인쇄 목차 면(들). 장제목 과반이 실린 첫 면 + 히트가 이어지는 연속 면(다면 목차)."""
+def find_toc_pages(doc, titles, search_upto=7, ch_starts=None):
+    """인쇄 목차 면(들). 장제목 과반이 실린 첫 면 + 히트가 이어지는 연속 면(다면 목차).
+
+    `ch_starts`(1-idx 장 시작 면)를 주면 **앞붙이 구간으로 범위를 한정**한다. 목차는
+    본문 앞에만 있으므로, 그 한정만으로 도비라(장제목 1개가 재등장하는 면)를 확실히
+    배제할 수 있고 확장 가드를 "새 제목 1개 이상"으로 완화해도 안전하다.
+    구 가드(2개 이상)는 목차 넘침 면이 장 하나만 싣고 넘어갈 때 — standard 분량에서
+    통상적인 형태 — 그 면을 통째로 놓쳐 뒷장이 '제목 미발견'으로 구조적 FAIL이 됐다.
+    """
+    # 본문 첫 면(0-idx). 앞붙이 = 이 앞 구간.
+    body0 = (min(ch_starts) - 1) if ch_starts else None
+    limit = min(search_upto, doc.page_count) if body0 is None else min(body0, doc.page_count)
     need = max(2, (len(titles) + 1) // 2)
     hits_by_page = {}
-    for pno in range(1, min(search_upto, doc.page_count)):
+    for pno in range(1, max(2, limit)):
         text = _norm(doc[pno].get_text())
         hits_by_page[pno] = sum(1 for t in titles if _norm(t)[:10] and _norm(t)[:10] in text)
     start = None
@@ -88,8 +98,11 @@ def find_toc_pages(doc, titles, search_upto=7):
                 break
     if start is None:
         return []
-    # 연속 면 확장은 "새 제목을 추가로 커버할 때만" — 도비라(장제목 1개 재등장)로
-    # 목차가 본문까지 번지는 것을 막는다. 전 제목 커버 시 즉시 중단.
+    # 연속 면 확장은 "새 제목을 추가로 커버할 때만". 앞붙이 구간이 확정된 경우
+    # (ch_starts 제공) 도비라가 애초에 범위 밖이므로 1개만 늘어도 목차 넘침으로 본다.
+    # 범위를 모르면 구 가드(2개 이상)를 유지해 본문으로 번지는 것을 막는다.
+    min_new = 1 if body0 is not None else 2
+
     def titles_on(pno):
         text = _norm(doc[pno].get_text())
         return {t for t in titles if _norm(t)[:10] and _norm(t)[:10] in text}
@@ -98,12 +111,41 @@ def find_toc_pages(doc, titles, search_upto=7):
     nxt = start + 1
     while nxt in hits_by_page and len(covered) < len(titles):
         new = titles_on(nxt) - covered
-        if len(new) < 2:  # 1개 재등장 = 도비라일 가능성 — 확장 중단
+        if len(new) < min_new:
             break
         out.append(nxt)
         covered |= new
         nxt += 1
     return out
+
+
+def _title_row_band(spans, t_span, title):
+    """랩된 목차 제목 행의 전체 세로 범위 (y0, y1).
+
+    긴 제목은 목차에서 2~3행으로 접힌다. 쪽번호를 **첫 줄**에 맞추는 조판(academic)도
+    있고 **마지막 줄**에 맞추는 조판(essay)도 있어서, 첫 스팬의 밴드만 보면 후자에서
+    쪽번호가 행 밖으로 판정돼 '행에 쪽번호 없음'이 된다. 같은 제목의 이어지는
+    조각 스팬(같은 급수 + 제목의 부분문자열 + 세로로 인접)까지 밴드를 넓힌다.
+    """
+    ntitle = _norm(title)
+    y0, y1 = t_span["bbox"][1], t_span["bbox"][3]
+    size = t_span["size"]
+    rest = sorted((s for s in spans if s is not t_span), key=lambda s: s["bbox"][1])
+    grew = True
+    while grew:
+        grew = False
+        for s in rest:
+            frag = _norm(s["text"])
+            if len(frag) < 4 or frag not in ntitle:
+                continue
+            if abs(s["size"] - size) > 0.6:      # 절 행·쪽번호 급수는 제외
+                continue
+            gap = s["bbox"][1] - y1
+            if -1 <= gap <= 1.5 * size:          # 바로 다음 줄만
+                y1 = max(y1, s["bbox"][3])
+                y0 = min(y0, s["bbox"][1])
+                grew = True
+    return y0, y1
 
 
 def _is_ordinal_decoration(text):
@@ -117,7 +159,7 @@ def g14a_toc_numbers(doc, titles, ch_starts):
     if not ch_starts:
         return ["장 시작 페이지 불명(북마크 부재?)"], pairs
     offset = ch_starts[0] - 1
-    toc_pages = find_toc_pages(doc, titles)
+    toc_pages = find_toc_pages(doc, titles, ch_starts=ch_starts)
     if not toc_pages:
         return ["인쇄 목차 면을 찾지 못함(장제목 과반이 실린 면 없음)"], pairs
     spans_by_page = {p: list(_spans(doc[p])) for p in toc_pages}
@@ -142,7 +184,9 @@ def g14a_toc_numbers(doc, titles, ch_starts):
                 if str(expected) not in nums:
                     problems.append(f"목차 p{toc_pages[0] + 1}~: '{title[:16]}' 기대 쪽번호 {expected} 부재")
             continue
-        y0, y1 = t_span["bbox"][1], t_span["bbox"][3]
+        # 랩된 제목은 행 전체(여러 줄)를 밴드로 잡는다 — 쪽번호를 마지막 줄에 맞추는
+        # 조판에서 첫 줄만 보면 놓친다.
+        y0, y1 = _title_row_band(spans_by_page[t_page], t_span, title)
         # 같은 행(y 겹침)의 순수 숫자 스팬 — 좌우 무관, 서수 장식(leading zero) 제외,
         # 제목과 수평으로 가장 가까운 것이 쪽번호 (다단 목차의 이웃 칼럼 오탐 방지)
         cands = [s for s in spans_by_page[t_page]
@@ -192,11 +236,14 @@ def _accent_colors_drawings(page):
 
 def g14b_key_color(doc, titles, ch_starts, brand_hex=None, tol=36):
     problems = []
-    toc_pages = find_toc_pages(doc, titles)
+    toc_pages = find_toc_pages(doc, titles, ch_starts=ch_starts)
     if not toc_pages or not ch_starts:
         return problems  # A가 이미 잡는다
     toc_pno = toc_pages[0]
-    toc_colors = _accent_colors_text(doc[toc_pno])
+    # 다면 목차는 묶음 전체를 본다 — 넘침 면에만 이색이 있으면 놓친다
+    toc_colors = set()
+    for p in toc_pages:
+        toc_colors |= _accent_colors_text(doc[p])
     if not toc_colors:
         return problems  # 무채색 목차 — 검사 대상 없음
     opener_hues = set()

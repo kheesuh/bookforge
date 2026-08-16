@@ -12,7 +12,9 @@ Contract (chapter md):
       :::
     kinds: info|tip|warn|quote|stat  (stat: first line = value, second = label)
 """
-import json, re, sys
+from __future__ import annotations  # convert_chapter의 `str | None`을 3.9에서도 파싱
+
+import json, re, sys, unicodedata
 from pathlib import Path
 from markdown_it import MarkdownIt
 
@@ -191,6 +193,63 @@ def render_list(tokens, ctx) -> str:
             i += 1
     return "\n".join(items) + "\n"
 
+# ---- 표 컬럼 폭: 좁은 컬럼 auto + 넓은 컬럼 비례 fr ----
+# 균등 (1fr,)*n은 4자 용어 컬럼과 40자 설명 컬럼에 같은 폭을 준다. 그렇다고 전부
+# 비례 fr로 주면 반대 방향으로 같은 죄를 짓는다 — 긴 컬럼이 잔여 폭을 지배해 짧은
+# 컬럼이 내용 폭 이하로 압착되고 한글이 한 자씩 세로로 꺾인다(단/일/통/합).
+# 그래서 자연폭이면 충분한 좁은 컬럼은 auto로 빼고, 넓은 컬럼들만 fr로 잔여 폭을
+# 나눈다. fr이 하나라도 있으면 표는 여전히 판면 폭을 채운다.
+TBL_AUTO_MAX = 14                  # 이 유효 폭 이하(CJK 7자 상당)면 auto
+TBL_COL_MIN, TBL_COL_MAX = 16, 42  # fr 컬럼 가중치 클램프 (하한은 auto 문턱과 겹치지 않게)
+# inline()이 낸 typst 마크업 토큰 — 폭 계산 전에 걷어낸다
+TYPST_RAW_RE = re.compile(r'#raw\("((?:[^"\\]|\\.)*)"\)')
+TYPST_FN_OPEN_RE = re.compile(r'#(?:strong|emph|strike)\[|#link\("(?:[^"\\]|\\.)*"\)\[')
+
+
+def _plain_width(s: str) -> int:
+    """평문 폭 — 전각(CJK) 2, 그 외 1. NFC 정규화로 결합문자·조합 한글의 중복 계수를 막는다
+    (NFD '가'는 자모 3개라 정규화 없이는 같은 글리프가 다른 폭을 갖는다)."""
+    s = unicodedata.normalize("NFC", s)
+    return sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in s)
+
+
+def _strip_markup(s: str) -> str:
+    s = TYPST_FN_OPEN_RE.sub("", s)
+    s = re.sub(r"(?<!\\)\];", "", s)   # 실제 닫기만 — 이스케이프된 '\]' 뒤의 ';'는 본문
+    return re.sub(r"\\(.)", r"\1", s)  # 이스케이프 역슬래시 해제
+
+
+def visible_width(cell: str) -> int:
+    """typst 마크업을 제거한 뒤 잰 유효 폭.
+
+    `#raw(…)` 내용은 **코드 원문**이라 마크업 해석 대상이 아니다 — 따로 떼어 원문
+    그대로 센다. 함께 벗기면 `` `C:\\tmp\\foo` ``의 역슬래시나 `` `];` ``가 마크업으로
+    오인돼 사라지고, 코드·경로 컬럼이 실제보다 좁게 배정된다.
+    """
+    total, pos = 0, 0
+    for m in TYPST_RAW_RE.finditer(cell):
+        total += _plain_width(_strip_markup(cell[pos:m.start()]))
+        total += _plain_width(m.group(1).replace("\\\\", "\\").replace('\\"', '"'))
+        pos = m.end()
+    return total + _plain_width(_strip_markup(cell[pos:]))
+
+
+def column_weights(padded_rows, ncol: int):
+    """컬럼별 트랙 크기 문자열 목록 — 좁으면 'auto', 넓으면 'Nfr'.
+
+    기준은 그 컬럼 전 셀(헤더 포함) 유효 폭의 최대값. 전 컬럼이 좁아 모두 auto면
+    표가 자연폭이 되는데, 용어표에는 그쪽이 타이포그래피적으로 옳다.
+    """
+    out = []
+    for ci in range(ncol):
+        w = max((visible_width(r[ci]) for r in padded_rows), default=0)
+        if w <= TBL_AUTO_MAX:
+            out.append("auto")
+        else:
+            out.append(f"{max(TBL_COL_MIN, min(TBL_COL_MAX, int(w)))}fr")
+    return out
+
+
 def render_table(tokens, ctx, cap=None) -> str:
     rows, cur = [], None
     for t in tokens:
@@ -202,13 +261,15 @@ def render_table(tokens, ctx, cap=None) -> str:
             cur.append(inline(t.children or []))
     if not rows:
         return ""
-    ncol = max(len(r) for r in rows)
+    ncol = max(1, max(len(r) for r in rows))
+    padded = [list(r) + [""] * (ncol - len(r)) for r in rows]
     cells = []
-    for r in rows:
-        r = r + [""] * (ncol - len(r))
+    for r in padded:
         cells.extend(f"[{c}]" for c in r)
-    # (1fr,)*n — 표 폭 = 판면 폭 100% 강제 (auto 컬럼은 내용 폭만큼만 차지해 우측이 빈다)
-    tbl = f"table(columns: (1fr,) * {ncol}, " + ", ".join(cells) + ")"
+    colspec = ", ".join(column_weights(padded, ncol))
+    if ncol == 1:
+        colspec += ","  # 1원소 배열은 후행 쉼표가 있어야 배열로 파싱된다
+    tbl = f"table(columns: ({colspec}), " + ", ".join(cells) + ")"
     if cap:
         title, source = cap
         args = [f"caption: [{esc(title)}]"]

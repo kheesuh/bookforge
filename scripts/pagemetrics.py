@@ -93,7 +93,8 @@ def analyze(pdf_path, frame_mm):
         for im in page.get_images(full=True):
             rects = page.get_image_rects(im[0])
             for r in rects:
-                img_cover += max(0.0, fitz.Rect(r).get_area())
+                # abs(Rect) = 면적 — get_area()는 PyMuPDF 1.26에서 제거돼 전 버전 호환 표기를 쓴다
+                img_cover += max(0.0, abs(fitz.Rect(r)))
                 if im[0] in fimg:
                     continue
                 inter = fitz.Rect(r) & fitz.Rect(fl, ft, fr, fb)
@@ -122,8 +123,8 @@ def analyze(pdf_path, frame_mm):
             if not inter.is_empty and inter.height > 2 and inter.width > 2:
                 objs.append((inter.y0, inter.y1))
                 vec_union |= inter
-        imgarea = min(1.0, img_cover / pr.get_area())
-        vecarea = (min(1.0, vec_union.get_area() / pr.get_area())
+        imgarea = min(1.0, img_cover / abs(pr))
+        vecarea = (min(1.0, abs(vec_union) / abs(pr))
                    if not vec_union.is_empty else 0.0)
 
         content_bottoms = [l["y1"] for l in lines] + [b for (_, b) in objs]

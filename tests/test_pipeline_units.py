@@ -1,0 +1,606 @@
+#!/usr/bin/env python3
+"""bookforge Python 층 수정 3종 단위 검증 (표 컬럼 폭 / validate 표기 규칙 / G16)."""
+import json
+import sys
+import tempfile
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO / "scripts"))
+sys.path.insert(0, str(REPO / ".claude/skills/bf-produce/scripts"))
+
+import md2typ  # noqa: E402
+import qc_gate  # noqa: E402
+import run_swarm  # noqa: E402
+
+OK, FAIL = [], []
+
+
+def check(name, cond, detail=""):
+    (OK if cond else FAIL).append(name)
+    print(f"  [{'PASS' if cond else 'FAIL'}] {name}" + (f"  {detail}" if detail else ""))
+
+
+def cols_of(typ: str):
+    """생성된 typst 조각에서 columns: (...) 안의 fr 목록을 뽑는다."""
+    import re
+    m = re.search(r"columns: \(([^)]*)\)", typ)
+    assert m, f"columns 미발견: {typ[:120]}"
+    return m.group(1)
+
+
+def md_to_typ(md: str) -> str:
+    with tempfile.TemporaryDirectory() as d:
+        src, dst = Path(d) / "ch.md", Path(d) / "ch.typ"
+        src.write_text(md, encoding="utf-8")
+        md2typ.convert_chapter(src, dst, "테스트 장", None)
+        return dst.read_text(encoding="utf-8")
+
+
+# ============================================================ A. 표 컬럼 폭
+print("\n=== A. md2typ 표 트랙 (좁은 컬럼 auto + 넓은 컬럼 비례 fr) ===")
+
+# A1 visible_width 원자 검사
+check("A1a CJK 2 / ASCII 1", md2typ.visible_width("가나다") == 6 and md2typ.visible_width("abc") == 3,
+      f'"가나다"={md2typ.visible_width("가나다")}, "abc"={md2typ.visible_width("abc")}')
+check("A1b #strong[] 마크업 제거", md2typ.visible_width("#strong[용어];") == md2typ.visible_width("용어"),
+      f'strong={md2typ.visible_width("#strong[용어];")} plain={md2typ.visible_width("용어")}')
+_a1c = md2typ.visible_width('#raw("abcd")')
+check("A1c #raw() 내용만 계산", _a1c == 4, f"={_a1c}")
+_a1d = md2typ.visible_width("\\#\\_x")
+check("A1d 이스케이프 역슬래시 제거", _a1d == 3, f"={_a1d}")
+_a1e = md2typ.visible_width("\\];")
+check("A1e 이스케이프된 ']' 보존", _a1e == 2, f"={_a1e}")
+check("A1f 빈 셀 0", md2typ.visible_width("") == 0)
+check("A1g #link 프리픽스 제거",
+      md2typ.visible_width('#link("https://very.long.example.com/x")[문서];') == md2typ.visible_width("문서"))
+
+# --- 표 트랙 산출: 좁은 컬럼 auto + 넓은 컬럼 비례 fr ---
+def tracks(md):
+    """생성된 typst의 columns 트랙 목록(문자열)."""
+    return [x.strip() for x in cols_of(md_to_typ(md)).split(",") if x.strip()]
+
+
+def raw_widths(md):
+    """진단용 — 각 컬럼의 클램프 전 유효 폭."""
+    import markdown_it
+    toks = md2typ.MD.parse(md)
+    i = next(k for k, t in enumerate(toks) if t.type == "table_open")
+    j = next(k for k, t in enumerate(toks) if t.type == "table_close")
+    rows, cur = [], None
+    for t in toks[i:j + 1]:
+        if t.type == "tr_open":
+            cur = []
+        elif t.type == "tr_close":
+            rows.append(cur)
+        elif t.type == "inline" and cur is not None:
+            cur.append(md2typ.inline(t.children or []))
+    n = max(len(r) for r in rows)
+    pad = [list(r) + [""] * (n - len(r)) for r in rows]
+    return [max(md2typ.visible_width(r[c]) for r in pad) for c in range(n)]
+
+
+# A2 혼합 — 좁은 컬럼 2 + 넓은 컬럼 2 (팀리드 렌더 검증에서 나온 압착 케이스)
+MIXED4 = """# 테스트 장
+
+| 전략 | 분기 수명 | 설명 | 적용 조건 |
+| --- | --- | --- | --- |
+| 단일 통합 | 2주 이내 | 모든 변경을 하나의 줄기에 모아 지속적으로 통합하는 방식으로 충돌을 조기에 드러낸다 | 팀 규모가 작고 배포 주기가 짧을 때 |
+| 기능 분기 | 1개월 | 기능 단위로 줄기를 떼어 독립 개발한 뒤 검수 후 병합하는 방식 | 검수 게이트가 필요한 조직 |
+"""
+tk, rw = tracks(MIXED4), raw_widths(MIXED4)
+check("A2 혼합 4컬럼 — 좁은 2개는 auto", tk[0] == "auto" and tk[1] == "auto",
+      f"tracks={tk} raw={rw}")
+check("A2b 넓은 2개는 fr", tk[2].endswith("fr") and tk[3].endswith("fr"), f"tracks={tk} raw={rw}")
+check("A2c 넓은 컬럼끼리는 내용 비례 유지",
+      int(tk[2][:-2]) >= int(tk[3][:-2]), f"tracks={tk} raw={rw}")
+check("A2d fr 상한 42", int(tk[2][:-2]) == 42, f"tracks={tk} raw={rw}")
+
+# A3 전부 좁음 → 전부 auto (표가 자연폭 — 용어표에 정당)
+NARROW = """# 테스트 장
+
+| 항목 | 값 | 비고 |
+| --- | --- | --- |
+| 가나다 | 라마바 | 사아자 |
+"""
+tk = tracks(NARROW)
+check("A3 전부 좁은 표 → 전 컬럼 auto", tk == ["auto", "auto", "auto"], f"tracks={tk}")
+
+# A4 전부 넓음 → 전부 fr (판면 폭 100% 유지)
+WIDE = """# 테스트 장
+
+| 첫째 개념의 정의와 배경 설명 | 둘째 개념의 정의와 배경 설명 |
+| --- | --- |
+| 여러 워커가 장을 나눠 동시에 집필하는 병렬 생성 구조를 가리킨다 | 조판 결함을 기계적으로 검출해 최종본 승격을 막는 검사 관문이다 |
+"""
+tk = tracks(WIDE)
+check("A4 전부 넓은 표 → 전 컬럼 fr", all(t.endswith("fr") for t in tk) and len(tk) == 2,
+      f"tracks={tk}")
+
+# A5 auto/fr 문턱 경계 — 유효 폭 14는 auto, 15는 fr(하한 16으로 클램프)
+BOUND = """# 테스트 장
+
+| A | B |
+| --- | --- |
+| 가나다라마바사 | 가나다라마바사x |
+"""
+tk, rw = tracks(BOUND), raw_widths(BOUND)
+check("A5 유효 폭 14 → auto / 15 → fr", rw == [14, 15] and tk == ["auto", "16fr"],
+      f"tracks={tk} raw={rw}")
+
+# A6 1컬럼 — 좁으면 auto, 넓으면 fr. 둘 다 후행 쉼표(1원소 배열)
+ONE_N = """# 테스트 장
+
+| 항목 |
+| --- |
+| 가 |
+"""
+ONE_W = """# 테스트 장
+
+| 항목 |
+| --- |
+| 여러 워커가 장을 나눠 동시에 집필하는 병렬 생성 구조를 가리킨다 |
+"""
+c_n, c_w = cols_of(md_to_typ(ONE_N)), cols_of(md_to_typ(ONE_W))
+check("A6 1컬럼 좁음 → (auto,)", c_n.strip() == "auto,", f"columns=({c_n})")
+check("A6b 1컬럼 넓음 → (42fr,)", c_w.strip() == "42fr,", f"columns=({c_w})")
+
+# A7 빈 셀 표 — 죽지 않고 auto
+EMPTY = """# 테스트 장
+
+| | |
+| --- | --- |
+| | |
+"""
+try:
+    check("A7 빈 셀 표 — 예외 없음 + auto", tracks(EMPTY) == ["auto", "auto"], f"{tracks(EMPTY)}")
+except Exception as e:  # noqa: BLE001
+    check("A7 빈 셀 표 — 예외 없음", False, repr(e))
+
+# A8 마크업이 폭을 부풀리지 않는다 (넓은 대역에서 확인 — 볼드 셀 vs 평문 셀 동일 fr)
+BOLD = """# 테스트 장
+
+| 헤더 | 헤더 |
+| --- | --- |
+| **여러 워커가 장을 나눠 동시에 집필하는 구조** | 여러 워커가 장을 나눠 동시에 집필하는 구조 |
+"""
+tk = tracks(BOLD)
+check("A8 볼드 셀과 평문 셀 동일 트랙", tk[0] == tk[1] and tk[0].endswith("fr"), f"tracks={tk}")
+
+# A9 정수 fr만 (12.0fr 금지)
+check("A9 정수 fr 출력", ".0fr" not in cols_of(md_to_typ(MIXED4)), cols_of(md_to_typ(MIXED4)))
+
+# A10 행 길이 불일치·3컬럼 정상 산출
+RAGGED = """# 테스트 장
+
+| A | B | C |
+| --- | --- | --- |
+| 하나 | 둘 | 셋 |
+"""
+try:
+    check("A10 3컬럼 정상 산출", len(tracks(RAGGED)) == 3, f"{tracks(RAGGED)}")
+except Exception as e:  # noqa: BLE001
+    check("A10 3컬럼 정상 산출", False, repr(e))
+
+
+# ============================================ B. run_swarm.validate() 표기 규칙
+print("\n=== B. run_swarm validate() 신규 하드 위반 ===")
+
+
+def notation(body: str):
+    """장 본문(H1 포함)을 validate에 태워 (위반, 경고)를 돌려준다."""
+    v, w, _ = run_swarm.validate("# 테스트 장\n\n" + body, "테스트 장")
+    return v, w
+
+
+def has(items, kw):
+    return any(kw in i for i in items)
+
+
+# B1 정상 산문
+v, w = notation("보통의 문장이다. 특별한 표기 위반이 없다.\n")
+check("B1 정상 산문 위반 0", not v and not w, f"v={v} w={w}")
+
+# B2~B4 엠대시 경계 (0 / 3 / 4)
+v, w = notation("문장 하나 — 둘 — 셋 — 이렇게 셋.\n")
+check("B2 엠대시 정확히 3개 → WARN(위반 아님)",
+      not has(v, "엠대시") and has(w, "엠대시 3개"), f"v={v} w={w}")
+v, w = notation("하나 — 둘 — 셋 — 넷 — 이렇게 넷.\n")
+check("B3 엠대시 4개 → 하드 위반", has(v, "엠대시 남용(4개)") and not has(w, "엠대시"), f"v={v} w={w}")
+v, w = notation("엠대시가 하나도 없는 문장이다.\n")
+check("B4 엠대시 0개 → 무반응", not has(v, "엠대시") and not has(w, "엠대시"), f"v={v} w={w}")
+v, w = notation("하나 — 이렇게 하나.\n")
+check("B4b 엠대시 1개 → WARN", has(w, "엠대시 1개") and not has(v, "엠대시"), f"w={w}")
+
+# B5 원문자 경계 (2 / 3)
+v, w = notation("보기는 ① 첫째 ② 둘째 이다.\n")
+check("B5 원문자 2개 → 통과", not has(v, "보기·선택지"), f"v={v}")
+v, w = notation("보기는 ① 첫째 ② 둘째 ③ 셋째 이다.\n")
+check("B6 원문자 3개 → 하드 위반", has(v, "보기·선택지"), f"v={v}")
+v, w = notation("보기:\n\n- ① 첫째\n- ② 둘째\n- ③ 셋째\n")
+check("B7 원문자가 줄마다 1개(리스트) → 통과", not has(v, "보기·선택지"), f"v={v}")
+
+# B8 1) 2) 3) 경계
+v, w = notation("근거는 1) 비용 2) 속도 이다.\n")
+check("B8 '1) 2)' 2개 → 통과", not has(v, "보기·선택지"), f"v={v}")
+v, w = notation("근거는 1) 비용 2) 속도 3) 신뢰 이다.\n")
+check("B9 '1) 2) 3)' 3개 → 하드 위반", has(v, "보기·선택지"), f"v={v}")
+v, w = notation("괄호형 (1) 비용 (2) 속도 (3) 신뢰 는 규칙 밖이다.\n")
+check("B10 '(1)(2)(3)' 괄호형은 비대상", not has(v, "보기·선택지"), f"v={v}")
+
+# B11 코드블록 안 엠대시·원문자는 무시
+v, w = notation("본문이다.\n\n```text\n하나 — 둘 — 셋 — 넷 — 다섯 —\n① ② ③ ④\n```\n\n끝.\n")
+check("B11 코드블록 안 엠대시 4개+ 무시", not has(v, "엠대시") and not has(v, "보기·선택지"),
+      f"v={v} w={w}")
+
+# B12 인라인 코드 안 엠대시 무시
+v, w = notation("설명 `a — b — c — d — e` 를 쓴다.\n")
+check("B12 인라인 코드 안 엠대시 무시", not has(v, "엠대시") and not has(w, "엠대시"), f"v={v} w={w}")
+
+# B13 표 행의 원문자는 오탐 제외
+v, w = notation("| A | B | C |\n| --- | --- | --- |\n| ① | ② | ③ |\n")
+check("B13 표 행 ①②③ 오탐 제외", not has(v, "보기·선택지"), f"v={v}")
+
+# B14 기존 위반 규칙 회귀 (H1 불일치 / HTML / 이미지 경로 / #### )
+v, _, _ = run_swarm.validate("# 다른 제목\n\n본문\n", "테스트 장")
+check("B14a H1 불일치 회귀", has(v, "첫 줄이"), f"v={v}")
+v, _ = notation("<div>x</div>\n")
+check("B14b HTML 태그 회귀", has(v, "HTML 태그"), f"v={v}")
+v, _ = notation("![캡션](../img/a.svg)\n")
+check("B14c 이미지 경로 회귀", has(v, "이미지 경로 위반"), f"v={v}")
+v, _ = notation("#### 너무 깊은 제목\n")
+check("B14d #### 회귀", has(v, "####"), f"v={v}")
+
+
+# B15~B18 softbreak 접힘 — 한 문단 안 생줄 나열 (사용자가 실제로 본 결함)
+v, w = notation("확인 문제: 다음 중 옳은 것은?\n① 보기 하나\n② 보기 둘\n③ 보기 셋\n")
+check("B15 문단 안 생줄 ①②③ → 하드 위반", has(v, "보기·선택지"), f"v={v}")
+v, w = notation("확인 문제:\n\n1. 다음 중 옳은 것은?\n   - ① 보기 하나\n   - ② 보기 둘\n   - ③ 보기 셋\n")
+check("B16 규정 문법(번호 문제 + 들여쓴 보기 리스트) → 통과", not has(v, "보기·선택지"), f"v={v}")
+v, w = notation("첫 문단 ① 가.\n\n둘째 문단 ② 나.\n\n셋째 문단 ③ 다.\n")
+check("B17 문단이 다르면 합산 안 함 → 통과", not has(v, "보기·선택지"), f"v={v}")
+v, w = notation("- ① 가 ② 나 ③ 다\n- 다른 항목\n")
+check("B18 리스트 항목 한 줄에 보기 3개 → 하드 위반", has(v, "보기·선택지"), f"v={v}")
+v, w = notation("근거:\n1) 비용\n2) 속도\n3) 신뢰\n")
+check("B19 '1)' 리스트 항목 줄나눔 → 통과", not has(v, "보기·선택지"), f"v={v}")
+v, w = notation("근거는 이렇다.\n비용 1)\n속도 2)\n신뢰 3)\n")
+check("B20 생줄 'N)' 문단 합산 3개 → 하드 위반", has(v, "보기·선택지"), f"v={v}")
+
+
+# ================================================== C. qc_gate G16 + 규칙 동치
+print("\n=== C. qc_gate G16 (검사 로직 + run_swarm 동치) ===")
+
+FIXTURES = {
+    "정상": "# 장\n\n평범한 문장이다. 위반이 없다.\n",
+    "엠대시3": "# 장\n\n하나 — 둘 — 셋 — 끝.\n",
+    "엠대시4": "# 장\n\n하나 — 둘 — 셋 — 넷 — 끝.\n",
+    "원문자2": "# 장\n\n보기는 ① 가 ② 나 이다.\n",
+    "원문자3": "# 장\n\n보기는 ① 가 ② 나 ③ 다 이다.\n",
+    "번호3": "# 장\n\n근거는 1) 가 2) 나 3) 다 이다.\n",
+    "코드블록내": "# 장\n\n```\n— — — — ① ② ③\n```\n\n본문.\n",
+    "인라인코드내": "# 장\n\n`— — — —` 이다.\n",
+    "표행": "# 장\n\n| A | B | C |\n| --- | --- | --- |\n| ① | ② | ③ |\n",
+    "복합위반": "# 장\n\n보기 ① 가 ② 나 ③ 다.\n\n하나 — 둘 — 셋 — 넷 — 끝.\n",
+    "문단접힘": "# 장\n\n확인 문제?\n① 가\n② 나\n③ 다\n",
+    "규정문법": "# 장\n\n1. 확인 문제?\n   - ① 가\n   - ② 나\n   - ③ 다\n",
+    # --- codex 적대 리뷰 결함 3~6의 재현 입력 (양쪽 구현 동치까지 검사) ---
+    "괄호참조": "# 장\n\n(주 3) 참고, (표 4) 참고, (그림 5) 참고.\n",
+    "한글원문자": "# 장\n\n보기 \u326e 첫째 \u326f 둘째 \u3270 셋째.\n",
+    "영문원문자": "# 장\n\n보기 \u24d0 first \u24d1 second \u24d2 third.\n",
+    "파이프없는표": "# 장\n\n항목 | 상태 | 결과\n---|---|---\n\u2460 준비 | \u2461 실행 | \u2462 검증\n",
+    "선행파이프산문": "# 장\n\n| 선택지는 \u2460 첫째 \u2461 둘째 \u2462 셋째이다.\n",
+    "틸드펜스": "# 장\n\n~~~text\n\u2460 \u2461 \u2462\n\u2014 \u2014 \u2014 \u2014\n~~~\n\n본문.\n",
+    "백틱4펜스": "# 장\n\n````text\n\u2460 \u2461 \u2462\n\u2014 \u2014 \u2014 \u2014\n````\n\n본문.\n",
+    "들여쓴펜스": "# 장\n\n  ```text\n  \u2460 \u2461 \u2462\n  \u2014 \u2014 \u2014 \u2014\n  ```\n\n본문.\n",
+}
+EXPECT_HARD = {"엠대시4", "원문자3", "번호3", "복합위반", "문단접힘",
+               "한글원문자", "영문원문자", "선행파이프산문"}
+EXPECT_WARN = {"엠대시3"}
+
+with tempfile.TemporaryDirectory() as d:
+    bd = Path(d)
+    (bd / "chapters").mkdir()
+    chapters = []
+    for i, (name, body) in enumerate(sorted(FIXTURES.items()), 1):
+        f = f"ch-{i:02d}.md"
+        (bd / "chapters" / f).write_text(body, encoding="utf-8")
+        chapters.append({"file": f, "title": "장", "_name": name})
+    outline = {"chapters": chapters}
+    for ch in chapters:
+        one = {"chapters": [ch]}
+        probs, warns = qc_gate.g16_notation_check(bd, one)
+        name = ch["_name"]
+        want_hard = name in EXPECT_HARD
+        want_warn = name in EXPECT_WARN
+        check(f"C-G16 {name}: HARD={want_hard} WARN={want_warn}",
+              bool(probs) == want_hard and bool(warns) == want_warn,
+              f"problems={probs} warns={warns}")
+
+        # 동치: run_swarm.validate()의 판정과 일치해야 한다 (교착 방지)
+        rs_prose = run_swarm.strip_code((bd / "chapters" / ch["file"]).read_text(encoding="utf-8"))
+        rs_v, rs_w = run_swarm.notation_problems(rs_prose)
+        check(f"C-동치 {name}", bool(rs_v) == bool(probs) and bool(rs_w) == bool(warns),
+              f"run_swarm=({rs_v},{rs_w}) qc_gate=({probs},{warns})")
+
+    # 복합 위반은 2건 (보기 + 엠대시)
+    comp = [c for c in chapters if c["_name"] == "복합위반"][0]
+    probs, _ = qc_gate.g16_notation_check(bd, {"chapters": [comp]})
+    check("C-복합 위반 2건", len(probs) == 2, f"{probs}")
+
+    # 산문 추출 정규식 동치 (strip_code vs _g16_prose)
+    for name, body in FIXTURES.items():
+        check(f"C-strip 동치 {name}",
+              run_swarm.strip_code(body) == qc_gate._g16_prose(body))
+
+    # 없는 장 파일은 건너뛴다
+    probs, warns = qc_gate.g16_notation_check(bd, {"chapters": [{"file": "nope.md", "title": "x"}]})
+    check("C-부재 장 무시", probs == [] and warns == [])
+
+
+# ====================== D. codex 적대 리뷰 결함 7건 재현 (2026-08-16)
+print("\n=== D. 적대 리뷰 결함 7건 재현 회귀 ===")
+
+# D1 (결함 1, 오탐) #raw 내용을 마크업으로 재해석해 폭 축소
+_d1a = md2typ.visible_width('#raw("C:\\\\tmp\\\\foo")')       # 표시 문자열 C:\tmp\foo = 10자
+_d1b = md2typ.visible_width('#raw("];")')                      # 표시 문자열 ]; = 2자
+_d1c = md2typ.visible_width('#raw("#strong[abcdefghijklmnopqrst];")')  # 30자
+check("D1a #raw 경로의 역슬래시 보존", _d1a == 10, f"={_d1a} (기대 10)")
+check("D1b #raw 안의 '];' 보존", _d1b == 2, f"={_d1b} (기대 2)")
+check("D1c #raw 안의 마크업 문자열 보존", _d1c == 30, f"={_d1c} (기대 30)")
+_d1d = md2typ.visible_width('앞 #raw("];") 뒤 #strong[가];')
+check("D1d raw 밖 마크업은 여전히 제거", _d1d == md2typ.visible_width("앞 ") + 2
+      + md2typ.visible_width(" 뒤 ") + 2, f"={_d1d}")
+
+# D2 (결함 2, 오탐) 유니코드 정규화 형태에 따른 폭 불일치
+_nfc, _nfd = "\uac00", "\u1100\u1161"          # '가' NFC / NFD
+_e1, _e2 = "\u00e9", "e\u0301"                  # 'é' NFC / NFD
+check("D2a NFD 한글도 NFC와 같은 폭", md2typ.visible_width(_nfd) == md2typ.visible_width(_nfc) == 2,
+      f"NFD={md2typ.visible_width(_nfd)} NFC={md2typ.visible_width(_nfc)}")
+check("D2b NFD 라틴 결합문자도 1폭", md2typ.visible_width(_e2) == md2typ.visible_width(_e1) == 1,
+      f"NFD={md2typ.visible_width(_e2)} NFC={md2typ.visible_width(_e1)}")
+
+# D3 (결함 3, 오탐) 괄호 참조 표기가 'N)' 나열로 오탐
+v, w = notation("(주 3) 참고, (표 4) 참고, (그림 5) 참고.\n")
+check("D3a '(주 3) (표 4) (그림 5)' 오탐 아님", not has(v, "보기·선택지"), f"v={v}")
+v, w = notation("각주 (1) 과 (2) 와 (3) 을 본다.\n")
+check("D3b '(1)(2)(3)' 여전히 비대상", not has(v, "보기·선택지"), f"v={v}")
+v, w = notation("근거는 1) 비용 2) 속도 3) 신뢰 이다.\n")
+check("D3c 괄호 밖 'N)' 3개는 여전히 위반", has(v, "보기·선택지"), f"v={v}")
+
+# D4 (결함 4, 미탐) ①-⑳ 밖 원문자 계열
+v, w = notation("보기 ㉮ 첫째 ㉯ 둘째 ㉰ 셋째.\n")
+check("D4a 한글 원문자 ㉮㉯㉰ 검출", has(v, "보기·선택지"), f"v={v}")
+v, w = notation("보기 \u24d0 first \u24d1 second \u24d2 third.\n")
+check("D4b 영문 원문자 ⓐⓑⓒ 검출", has(v, "보기·선택지"), f"v={v}")
+v, w = notation("보기 \u2474 하나 \u2475 둘 \u2476 셋.\n")
+check("D4c 괄호 숫자 ⑴⑵⑶ 검출", has(v, "보기·선택지"), f"v={v}")
+v, w = notation("보기 ㉮ 첫째 ㉯ 둘째.\n")
+check("D4d 확대 계열도 2개는 통과", not has(v, "보기·선택지"), f"v={v}")
+
+# D5 (결함 5) GFM 표 판정
+v, w = notation("항목 | 상태 | 결과\n---|---|---\n\u2460 준비 | \u2461 실행 | \u2462 검증\n")
+check("D5a 선행 '|' 없는 유효 표 오탐 아님", not has(v, "보기·선택지"), f"v={v}")
+v, w = notation("| 선택지는 \u2460 첫째 \u2461 둘째 \u2462 셋째이다.\n")
+check("D5b 선행 '|' 하나뿐인 산문은 검사됨", has(v, "보기·선택지"), f"v={v}")
+v, w = notation("본문 \u2460 가 \u2461 나 \u2462 다.\n항목 | 값\n---|---\na | b\n")
+check("D5c 같은 블록의 표 앞 산문 위반은 잡힌다", has(v, "보기·선택지"), f"v={v}")
+v, w = notation("| A | B | C |\n| --- | --- | --- |\n| \u2460 | \u2461 | \u2462 |\n")
+check("D5d 표준 파이프 표는 여전히 제외", not has(v, "보기·선택지"), f"v={v}")
+
+# D6 (결함 6, 미탐) 지원 펜스 확장
+v, w = notation("본문.\n\n~~~text\n\u2460 \u2461 \u2462\n\u2014 \u2014 \u2014 \u2014\n~~~\n\n끝.\n")
+check("D6a ~~~ 펜스 내용 무시", not has(v, "보기·선택지") and not has(v, "엠대시"), f"v={v} w={w}")
+v, w = notation("본문.\n\n````text\n\u2460 \u2461 \u2462\n\u2014 \u2014 \u2014 \u2014\n````\n\n끝.\n")
+check("D6b 백틱 4개 펜스 내용 무시", not has(v, "보기·선택지") and not has(v, "엠대시"), f"v={v} w={w}")
+v, w = notation("본문.\n\n  ```text\n  \u2460 \u2461 \u2462\n  \u2014 \u2014 \u2014 \u2014\n  ```\n\n끝.\n")
+check("D6c 2칸 들여쓴 펜스 내용 무시", not has(v, "보기·선택지") and not has(v, "엠대시"), f"v={v} w={w}")
+v, w = notation("본문.\n\n```text\n~~~ 는 닫지 못한다 \u2014 \u2014 \u2014 \u2014\n```\n\n끝.\n")
+check("D6d 다른 종류 펜스로는 안 닫힌다", not has(v, "엠대시"), f"v={v} w={w}")
+v, w = notation("본문.\n\n```text\n\u2460 \u2461 \u2462\n```\n\n보기 \u2460 가 \u2461 나 \u2462 다.\n")
+check("D6e 펜스 밖 위반은 그대로 검출", has(v, "보기·선택지"), f"v={v}")
+
+# D7 (결함 7) outline 장 파일 중복 가드
+import subprocess as _sp
+RUNNER = REPO / ".claude/skills/bf-produce/scripts/run_swarm.py"
+with tempfile.TemporaryDirectory() as d:
+    bd = Path(d); (bd / "chapters").mkdir()
+    def _run(chs):
+        (bd / "outline.json").write_text(json.dumps({"chapters": chs}, ensure_ascii=False),
+                                         encoding="utf-8")
+        return _sp.run([sys.executable, str(RUNNER), str(bd), "--skill", str(REPO), "--dry-run"],
+                       capture_output=True, text=True)
+    r = _run([{"file": "ch-01.md", "title": "첫 장"}, {"file": "ch-01.md", "title": "다른 장"}])
+    check("D7a 동일 file 중복 → 즉시 종료", r.returncode != 0 and "중복" in (r.stdout + r.stderr),
+          f"rc={r.returncode} {(r.stderr or r.stdout).strip()[:90]}")
+    r = _run([{"file": "part-a/ch-01.md", "title": "A"}, {"file": "part-b/ch-01.md", "title": "B"}])
+    check("D7b 동일 stem(다른 경로) 중복 → 즉시 종료",
+          r.returncode != 0 and "stem" in (r.stdout + r.stderr),
+          f"rc={r.returncode} {(r.stderr or r.stdout).strip()[:90]}")
+    r = _run([{"file": "ch-01.md", "title": "첫 장"}, {"file": "ch-02.md", "title": "둘째 장"}])
+    check("D7c 고유 파일명은 정상 진행", r.returncode == 0 and "dry-run" in r.stdout,
+          f"rc={r.returncode} {r.stdout.strip()[:70]}")
+
+
+
+# ============ E. G8-STRETCH 표제 여백 캘리브레이션 (2026-08-16)
+# 게이트를 느슨하게 여는 방향의 변경이므로, 표제가 없는 면의 임계가 종전(0.18)
+# 그대로임을 먼저 못박는다 — 진짜 공기 채움(행간 확대·빈 줄)은 표제 가산을 못 받는다.
+print("\n=== E. G8-STRETCH 캘리브레이션 ===")
+
+def thr(style, sizes, body=10.0):
+    return qc_gate.g8_gap_threshold(style, [{"size": z} for z in sizes], body)
+
+# E1 안전 속성 — 표제 0개 면은 임계 0.18 불변
+t, h = thr("academic", [10.0] * 25)
+check("E1 표제 없는 면 임계 0.18 불변 (진짜 공기 채움 계속 잡음)", t == 0.18 and h == 0,
+      f"thr={t} heads={h}")
+for g in (0.19, 0.30, 0.45, 0.90):
+    t, _ = thr("academic", [10.0] * 25)
+    check(f"E1b 표제 0개·gap {g} → 적발", g > t, f"thr={t}")
+
+# E2 표제 판별 대역 — academic H2 11.5(1.15)·practical H2 11.3(1.13)은 잡고
+#    academic H3 10.5(1.05)는 제외 (본문 10.0 기준)
+_, h = thr("academic", [10.0, 11.5, 10.0])
+check("E2a academic H2 11.5pt 포착", h == 1, f"heads={h}")
+_, h = thr("practical", [10.0, 11.3, 10.0])
+check("E2b practical H2 11.3pt 포착", h == 1, f"heads={h}")
+_, h = thr("academic", [10.0, 10.5, 10.0])
+check("E2c academic H3 10.5pt 제외", h == 0, f"heads={h}")
+_, h = thr("academic", [10.0, 11.19, 11.21])
+check("E2d 문턱 1.12 경계(11.19 제외 / 11.21 포착)", h == 1, f"heads={h}")
+
+# E3 가산·상한
+t, _ = thr("academic", [10.0, 11.5])
+check("E3a 표제 1개 → 0.25", abs(t - 0.25) < 1e-9, f"thr={t}")
+t, _ = thr("academic", [10.0, 11.5, 11.5, 11.5])
+check("E3b 표제 3개 → 0.39", abs(t - 0.39) < 1e-9, f"thr={t}")
+t, _ = thr("business", [10.0] + [16.0] * 9)
+check("E3c 표제 9개 → 상한 0.45", t == 0.45, f"thr={t}")
+t, _ = thr("essay", [10.0, 12.0, 12.0])
+check("E3d 전 스타일 가산 적용(essay 2개 → 0.32)", abs(t - 0.32) < 1e-9, f"thr={t}")
+
+# E4 insight는 기왕의 식 유지(실측 픽스처 부재 — 상한도 없음)
+t, _ = thr("insight", [10.0, 14.0, 14.0, 14.0])
+check("E4 insight 식 유지 0.28+0.10*(heads-1)", abs(t - 0.48) < 1e-9, f"thr={t}")
+
+# E5 실측 회귀 — 픽스처 실제 면의 (gap, 표제 크기)로 판정 재현
+#    출처: /tmp/bf-typo-fix/<style>/draft/book.pdf 실측 (수리 전 academic p10/p13·essay p15 FAIL)
+REAL = [  # (style, page, gap, 면의 행 크기 목록 요약, body, 기대: 적발 여부)
+    ("academic", 6,  0.179, [10.0]*19 + [11.5, 11.5, 10.5, 10.5], 10.0, False),
+    ("academic", 10, 0.182, [10.0]*17 + [11.5, 11.5, 11.5, 10.5, 10.5], 10.0, False),
+    ("academic", 13, 0.191, [10.0]*16 + [11.5, 11.5, 11.5, 10.5, 10.5], 10.0, False),
+    ("academic", 16, 0.087, [10.0]*14 + [10.5], 10.0, False),
+    ("essay",    15, 0.272, [10.0]*13 + [12.0, 12.0], 10.0, False),
+    ("essay",    11, 0.090, [10.0]*11, 10.0, False),
+    ("business", 4,  0.245, [10.5]*23 + [16.0]*3 + [12.0]*5, 10.5, False),
+    ("business", 10, 0.250, [10.5]*14 + [16.0]*4 + [40.0] + [12.0]*4, 10.5, False),
+]
+for style, pg, gap, sizes, body, want_flag in REAL:
+    t, h = thr(style, sizes, body)
+    check(f"E5 {style} p{pg} gap={gap} heads={h} thr={t:.2f} → 적발={gap > t}",
+          (gap > t) == want_flag, f"thr={t:.3f}")
+
+# E6 반례 — 같은 면에서 표제만 걷어내면(=순수 공기) 다시 적발되어야 한다
+for style, pg, gap, sizes, body, _ in REAL:
+    flat = [body] * len(sizes)          # 표제 없는 동일 분량 면
+    t, h = thr(style, flat, body)
+    if gap > 0.18:
+        check(f"E6 {style} p{pg} 표제 제거 시 재적발 (gap {gap} > 0.18)",
+              h == 0 and gap > t, f"thr={t}")
+
+
+
+# ============ F. tocgate 다면 목차 · 랩된 제목 행 (2026-08-16)
+# 합성 PDF로 두 결함을 재현한다 — /tmp 렌더 픽스처는 휘발성이라 회귀 자산이 못 된다.
+print("\n=== F. tocgate 목차 인식 ===")
+
+import tocgate  # noqa: E402
+try:
+    import pymupdf as _fitz
+except ImportError:
+    import fitz as _fitz
+
+F_TITLES = ["Alpha Governance Review", "Beta Electronic Voting",
+            "Gamma Internal Control", "Delta Extremely Long Chapter Title For Wrapping"]
+F_STARTS = [4, 8, 11, 14]          # 1-idx 장 시작 → offset 3 → 인쇄 기대 1,5,8,11
+
+
+def make_toc_pdf(split=True, nums=(1, 5, 8, 11)):
+    """앞붙이(표지+목차 1~2면) + 본문. split=False면 목차 1면에 전 장 수록.
+    nums로 인쇄 쪽번호를 틀리게 심어 게이트 감도를 확인한다."""
+    doc = _fitz.open()
+    for _ in range(16):
+        doc.new_page(width=420, height=595)
+    doc[0].insert_text((60, 100), "Book Title", fontsize=20)
+
+    def row(page, y, title, num, wrap=False):
+        if wrap:   # 랩된 제목 — 쪽번호를 **둘째 줄**에 맞춘다(essay 조판 형태)
+            page.insert_text((70, y), title[:22], fontsize=10)
+            page.insert_text((70, y + 14), title[22:], fontsize=10)
+            page.insert_text((370, y + 14), str(num), fontsize=10)
+        else:
+            page.insert_text((70, y), title, fontsize=10)
+            page.insert_text((370, y), str(num), fontsize=10)
+
+    if split:
+        # 목차 1면: 1~3장 / 목차 2면(넘침): 4장 하나만 — 구 가드가 놓치던 형태
+        for i, (t, n) in enumerate(zip(F_TITLES[:3], nums[:3])):
+            row(doc[1], 150 + i * 40, t, n)
+        row(doc[2], 150, F_TITLES[3], nums[3], wrap=True)
+    else:
+        for i, (t, n) in enumerate(zip(F_TITLES, nums)):
+            row(doc[1], 150 + i * 40, t, n, wrap=(i == 3))
+    # 도비라 — 장 시작 면에 장제목 재등장(확장이 본문으로 번지면 안 된다)
+    for st, t in zip(F_STARTS, F_TITLES):
+        doc[st - 1].insert_text((60, 120), t, fontsize=16)
+    doc.set_toc([[1, t, st] for t, st in zip(F_TITLES, F_STARTS)])
+    return doc
+
+
+# F1 결함 A — 넘침 면에 장이 하나뿐이어도 목차로 인정
+doc = make_toc_pdf(split=True)
+old = tocgate.find_toc_pages(doc, F_TITLES)                       # ch_starts 없음(구 경로)
+new = tocgate.find_toc_pages(doc, F_TITLES, ch_starts=F_STARTS)
+check("F1a 구 경로(ch_starts 없음)는 넘침 면을 놓친다(회귀 기준선)", old == [1], f"old={old}")
+check("F1b 신 경로는 목차 2면을 인정", new == [1, 2], f"new={new}")
+a, pairs = tocgate.g14a_toc_numbers(doc, F_TITLES, F_STARTS)
+check("F1c 다면 목차 G14-A PASS", not a, f"problems={a}")
+check("F1d 4장 쌍 확보·인쇄=폴리오",
+      len(pairs) == 4 and all(p["printed"] == p["expected"] for p in pairs),
+      f"pairs={[(p['printed'], p['expected']) for p in pairs]}")
+check("F1e 확장이 본문(도비라)까지 번지지 않음", max(new) < min(F_STARTS) - 1, f"new={new}")
+
+# F2 결함 B — 쪽번호가 랩된 제목의 마지막 줄에 정렬돼도 찾는다
+_sp = list(tocgate._spans(doc[2]))
+_t = next(s for s in _sp if tocgate._norm(F_TITLES[3])[:10] in tocgate._norm(s["text"]))
+band = tocgate._title_row_band(_sp, _t, F_TITLES[3])
+check("F2a 랩된 제목 밴드가 둘째 줄까지 확장", band[1] - band[0] > 12, f"band={band}")
+check("F2b 랩 제목의 쪽번호 11 페어링", any(p["printed"] == 11 for p in pairs),
+      f"pairs={[(p['printed'], p['expected']) for p in pairs]}")
+
+# F3 회귀 — 1면 목차는 종전대로
+doc1 = make_toc_pdf(split=False)
+one = tocgate.find_toc_pages(doc1, F_TITLES, ch_starts=F_STARTS)
+a1, pairs1 = tocgate.g14a_toc_numbers(doc1, F_TITLES, F_STARTS)
+check("F3a 1면 목차 인식 유지", one == [1], f"={one}")
+check("F3b 1면 목차 G14-A PASS", not a1 and len(pairs1) == 4, f"problems={a1}")
+
+# F4 감도 — 판정 기준은 안 건드렸다: 인쇄 쪽번호가 틀리면 여전히 FAIL.
+#    넓힌 것은 "인식 범위"뿐이므로, 새로 보이게 된 넘침 면·랩 행에서도 오류는 잡혀야 한다.
+bad1 = make_toc_pdf(split=True, nums=(99, 5, 8, 11))     # 목차 1면의 장
+a2, _ = tocgate.g14a_toc_numbers(bad1, F_TITLES, F_STARTS)
+check("F4a 목차 1면의 틀린 쪽번호 적발", any("인쇄 99" in x for x in a2), f"problems={a2}")
+bad2 = make_toc_pdf(split=True, nums=(1, 5, 8, 77))      # 넘침 면의 랩된 장
+a3, _ = tocgate.g14a_toc_numbers(bad2, F_TITLES, F_STARTS)
+check("F4b 넘침 면·랩 행의 틀린 쪽번호도 적발", any("인쇄 77" in x for x in a3), f"problems={a3}")
+
+for _d in (doc, doc1, bad1, bad2):
+    _d.close()
+
+# F5 실물 픽스처(있을 때만) — sub-typst 렌더본
+_fx = Path("/tmp/bf-typo-fix")
+_ran = False
+for style in ("academic", "essay", "practical", "business", "base-academic"):
+    pdf, outl = _fx / style / "draft" / "book.pdf", _fx / style / "outline.json"
+    if not (pdf.exists() and outl.exists()):
+        continue
+    _ran = True
+    t = [c["title"].strip() for c in json.loads(outl.read_text())["chapters"]]
+    dd = _fitz.open(pdf)
+    cs = sorted({p for l, _, p in dd.get_toc(simple=True) if l == 1})
+    pa, _pr = tocgate.g14a_toc_numbers(dd, t, cs)
+    pb = tocgate.g14b_key_color(dd, t, cs, None)
+    tp = tocgate.find_toc_pages(dd, t, ch_starts=cs)
+    check(f"F5 실물 {style} G14-A/B PASS (목차 {len(tp)}면)", not pa and not pb, f"A={pa} B={pb}")
+    dd.close()
+if not _ran:
+    print("  [SKIP] F5 실물 픽스처 부재 — /tmp/bf-typo-fix")
+
+
+print("\n" + "=" * 60)
+print(f"PASS {len(OK)} / FAIL {len(FAIL)}")
+if FAIL:
+    for f in FAIL:
+        print("  FAILED:", f)
+    sys.exit(1)
+print("ALL UNIT TESTS PASS")
