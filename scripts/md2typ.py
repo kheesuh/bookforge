@@ -20,6 +20,15 @@ from markdown_it import MarkdownIt
 
 MD = MarkdownIt("commonmark").enable("table").enable("strikethrough")
 
+# klreq 행두 금칙 — 가운뎃점은 행 첫머리에 올 수 없다. 라틴 낱말 사이의 `·`는
+# UAX#14가 줄바꿈을 열어 두므로 WORD JOINER(U+2060)로 그 자리를 붙여 둔다.
+# 문자 자체는 그대로 두고 **개행 기회만** 없앤다(저자 구분자 표기 보존).
+INTERPUNCT_RE = re.compile(r"(?<!\u2060)([·・])")
+
+
+def no_break_interpunct(text: str) -> str:
+    return INTERPUNCT_RE.sub("\u2060" + r"\1", text)
+
 ESC = "\\`#$&_*@<>[]~^"
 
 def esc(text: str) -> str:
@@ -31,7 +40,8 @@ def esc(text: str) -> str:
             out.append("\\/")  # avoid `//` comment
         else:
             out.append(ch)
-    return "".join(out)
+    # summary·caption처럼 inline()을 거치지 않는 텍스트도 같은 금칙 규칙을 지켜야 한다.
+    return no_break_interpunct("".join(out))
 
 def inline(tokens) -> str:
     """Render markdown-it inline children to typst markup."""
@@ -212,6 +222,16 @@ def render_list(tokens, ctx) -> str:
 # 나눈다. fr이 하나라도 있으면 표는 여전히 판면 폭을 채운다.
 TBL_AUTO_MAX = 14   # 최장 셀이 이 폭 이하(CJK 7자 상당)면 auto — 내용 자연폭이면 충분
 TBL_FR_MIN = 16     # 가장 좁은 fr 컬럼의 기준 가중치(비율만 의미가 있다)
+# 판면의 명목 유효 폭(유닛). 표 급수 9~9.5pt 기준 실측 근사 — 스타일마다 130~170mm라
+# 60~80유닛 대역이고, 아래 하한은 '붕괴 방지선'이라 이 근사로 충분하다.
+TBL_FRAME_UNITS = 70
+# 컬럼 폭이 최장 낱말의 2배 미만이면 낱말이 한 줄에 하나씩 떨어져 줄 채움이 붕괴한다
+# (실측 표 5-3: 폭 49.8pt ≈ 최장 낱말 1.0배에서 117유닛이 27행). 그 지점을 하한으로.
+TBL_WORD_K = 2.0
+TBL_WORD_DEMAND_MAX = 0.45   # 한 컬럼이 하한을 이유로 지면을 독식하지 않게
+# 하한 총합이 지면을 다 먹으면 내용 차별화가 사라진다(3컬럼 표가 전부 균등해졌다).
+# 초과분은 비례 축소 — 하한은 '최소 배분'이지 지면보다 클 수 없다.
+TBL_WORD_BUDGET = 0.75
 # inline()이 낸 typst 마크업 토큰 — 폭 계산 전에 걷어낸다
 TYPST_RAW_RE = re.compile(r'#raw\("((?:[^"\\]|\\.)*)"\)')
 TYPST_FN_OPEN_RE = re.compile(r'#(?:strong|emph|strike)\[|#link\("(?:[^"\\]|\\.)*"\)\[')
@@ -221,13 +241,45 @@ def _plain_width(s: str) -> int:
     """평문 폭 — 전각(CJK) 2, 그 외 1. NFC 정규화로 결합문자·조합 한글의 중복 계수를 막는다
     (NFD '가'는 자모 3개라 정규화 없이는 같은 글리프가 다른 폭을 갖는다)."""
     s = unicodedata.normalize("NFC", s)
-    return sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in s)
+    return sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1
+               for c in s if unicodedata.category(c) != "Cf")   # 형식문자(WJ 등)는 폭 0
 
 
 def _strip_markup(s: str) -> str:
     s = TYPST_FN_OPEN_RE.sub("", s)
     s = re.sub(r"(?<!\\)\];", "", s)   # 실제 닫기만 — 이스케이프된 '\]' 뒤의 ';'는 본문
     return re.sub(r"\\(.)", r"\1", s)  # 이스케이프 역슬래시 해제
+
+
+# 줄바꿈 가능 지점: 공백과 CJK. CJK는 글자 사이 어디서나 끊기므로 '끊을 수 없는 토큰'이
+# 아니다 — 라틴 낱말만 컬럼 최소 폭을 구속한다.
+CJK_RE = re.compile(r"[\u1100-\u11FF\u2E80-\uA4CF\uAC00-\uD7AF\uF900-\uFAFF\uFF00-\uFFEF]")
+
+
+def visible_text(cell: str) -> str:
+    """typst 마크업을 제거한 평문. `#raw(…)`는 코드 원문이라 따로 복원한다."""
+    parts, pos = [], 0
+    for m in TYPST_RAW_RE.finditer(cell):
+        parts.append(_strip_markup(cell[pos:m.start()]))
+        parts.append(m.group(1).replace("\\\\", "\\").replace('\\"', '"'))
+        pos = m.end()
+    parts.append(_strip_markup(cell[pos:]))
+    return "".join(parts)
+
+
+def unbreakable_width(cell: str) -> int:
+    """이 셀에서 **끊을 수 없는 최장 토큰**의 폭.
+
+    컬럼이 이보다 좁으면 낱말이 한 줄에 하나씩 떨어지고, '폭 ∝ 내용'의 선형 가정이
+    무너진다(실측 표 5-3: 폭 49.8pt 컬럼에서 `Americans`/`with`/`Disabilities`가
+    각 1행 — 내용 117유닛이 27행이 됐다). 그래서 폭 배분의 하한이 된다.
+    """
+    best = 0
+    for tok in visible_text(cell).split():
+        for run in CJK_RE.split(tok):        # CJK는 끊기므로 그 사이가 경계다
+            if run:
+                best = max(best, _plain_width(run))
+    return best
 
 
 def visible_width(cell: str) -> int:
@@ -266,9 +318,38 @@ def column_weights(padded_rows, ncol: int):
     tot = {ci: max(1, sum(visible_width(r[ci]) for r in padded_rows)) for ci in fr_cols}
     floor = (sum(tot.values()) / len(tot)) / 2       # 등분 폭의 절반
     adj = {ci: t + floor for ci, t in tot.items()}   # 가산 — 순서 보존
-    base = min(adj.values())
-    return [f"{max(TBL_FR_MIN, round(TBL_FR_MIN * adj[ci] / base))}fr"
-            if ci in adj else "auto" for ci in range(ncol)]
+    tsum = sum(adj.values())
+    # 끊을 수 없는 최장 토큰 하한 — 낱말의 2배가 안 되는 폭은 줄 채움이 붕괴한다.
+    # '비례 주장'이 아니라 붕괴 방지선이므로, 내용 비가 이미 그 위면 작동하지 않는다.
+    word = {ci: max(unbreakable_width(r[ci]) for r in padded_rows) for ci in fr_cols}
+    need = {ci: min(TBL_WORD_DEMAND_MAX, TBL_WORD_K * w / TBL_FRAME_UNITS)
+            for ci, w in word.items()}
+    nsum = sum(need.values())
+    if nsum > TBL_WORD_BUDGET:                       # 과다 청구 시 비례 축소
+        need = {ci: v * TBL_WORD_BUDGET / nsum for ci, v in need.items()}
+    # 물채우기 — 하한에 걸린 컬럼은 하한에 **고정**하고, 남은 지면만 나머지 컬럼들이
+    # 내용 비로 나눈다. 단순히 max() 후 재정규화하면 올려 준 몫이 도로 깎여 하한이
+    # 지켜지지 않는다(실측: 하한 73pt로 올린 컬럼이 재정규화 뒤 50pt로 되돌아갔다).
+    fixed, free = {}, set(fr_cols)
+    while True:
+        rest = 1.0 - sum(fixed.values())
+        wsum = sum(adj[c] for c in free) or 1.0
+        cand = {c: rest * adj[c] / wsum for c in free}
+        under = [c for c in free if cand[c] < need[c]]
+        if not under or not free:
+            fixed.update(cand)
+            break
+        for c in under:
+            fixed[c] = need[c]
+            free.discard(c)
+    sh = fixed
+    # **단조성 강제** — 내용이 더 많은 컬럼이 더 좁아지는 일은 없다.
+    run = 0.0
+    for ci in sorted(fr_cols, key=lambda c: tot[c]):
+        run = sh[ci] = max(sh[ci], run)
+    base = min(sh.values())
+    return [f"{max(TBL_FR_MIN, round(TBL_FR_MIN * sh[ci] / base))}fr"
+            if ci in sh else "auto" for ci in range(ncol)]
 
 
 def render_table(tokens, ctx, cap=None) -> str:

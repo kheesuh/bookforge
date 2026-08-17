@@ -25,6 +25,7 @@ except ImportError:
 
 def _norm(s):
     s = unicodedata.normalize("NFKC", s)
+    s = "".join(c for c in s if unicodedata.category(c) != "Cf")   # WJ 등 형식문자 제거
     return re.sub(r"[\s​]+", "", s)
 
 

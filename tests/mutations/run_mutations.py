@@ -26,7 +26,7 @@ try:
 except ImportError:
     import fitz
 
-from tocgate import find_toc_pages, g14a_toc_numbers, g14b_key_color, g14c_contrast
+from tocgate import _norm, find_toc_pages, g14a_toc_numbers, g14b_key_color, g14c_contrast
 
 
 def load(book_dir):
@@ -39,21 +39,33 @@ def load(book_dir):
 
 def mutate_toc_number(doc, titles, ch_starts):
     """첫 장의 목차 인쇄 쪽번호를 지우고 +7 값으로 재스탬핑."""
-    toc_pages = find_toc_pages(doc, titles)
-    assert toc_pages, "목차 면 미발견 — 뮤테이션 불가"
-    page = doc[toc_pages[0]]
     offset = ch_starts[0] - 1
     target = str(ch_starts[0] - offset)  # 첫 장 폴리오(=1)
-    for b in page.get_text("dict")["blocks"]:
-        for l in b.get("lines", []):
-            for s in l["spans"]:
-                if s["text"].strip() == target:
-                    r = fitz.Rect(s["bbox"])
-                    page.add_redact_annot(r, fill=(1, 1, 1))
-                    page.apply_redactions()
-                    page.insert_text(fitz.Point(r.x0, r.y1 - 1), str(int(target) + 7),
-                                     fontsize=s["size"], color=(0, 0, 0))
-                    return True
+    title_key = _norm(titles[0])
+    # find_toc_pages()의 연속면 확장은 첫 목차 면을 제외할 수 있다. 그 결과 첫 반환면의
+    # 절 번호 '1'을 잘못 바꿔도 실제 장 쪽번호는 살아 있어 M1이 무감각해졌다. 첫 장
+    # 제목 행을 앞붙이 전체에서 직접 찾고, 같은 y 밴드의 우측 쪽번호만 변조한다.
+    for pno in range(max(0, ch_starts[0] - 1)):
+        page = doc[pno]
+        lines = [l for b in page.get_text("dict")["blocks"] for l in b.get("lines", [])]
+        title_line = next((l for l in lines
+                           if title_key in _norm("".join(s["text"] for s in l["spans"]))), None)
+        if not title_line:
+            continue
+        band = fitz.Rect(title_line["bbox"])
+        candidates = []
+        for line in lines:
+            for span in line["spans"]:
+                r = fitz.Rect(span["bbox"])
+                if span["text"].strip() == target and r.x0 > band.x1 and r.y0 < band.y1 and r.y1 > band.y0:
+                    candidates.append((r.x0, r, span["size"]))
+        if candidates:
+            _, r, size = max(candidates)
+            page.add_redact_annot(r, fill=(1, 1, 1))
+            page.apply_redactions()
+            page.insert_text(fitz.Point(r.x0, r.y1 - 1), str(int(target) + 7),
+                             fontsize=size, color=(0, 0, 0))
+            return True
     return False
 
 

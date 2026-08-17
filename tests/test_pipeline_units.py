@@ -932,6 +932,57 @@ check("I3e 도비라가 아닌 면은 비대상", qc_gate.g17_opener_check([_op(
 check("I3f 정본에 G17이 기재됐다", "G17-OPENER" in _pag)
 
 
+
+# ============ J. 2라운드 — 표 폭 붕괴 하한 · 행두 금칙 · 문항 10 (2026-08-17)
+print("\n=== J. 2라운드 수리 ===")
+
+# J1 (B-9 잔존) 최장 낱말 하한 — 폭이 낱말의 2배 미만이면 줄 채움이 붕괴한다
+_lat = "Title VII of the Civil Rights Act, Americans with Disabilities Act (ADA)"
+_kor = "주택의 매매·임대·금융에서 인수와 가격 양면에 모두 적용되며 각 주 보험법이 규율한다 " * 6
+_t53 = _tbl([["분야", "적용 법령", "핵심 내용·사례"],
+             ["Employment", _lat, _kor], ["Housing", _lat, _kor]])
+_fr53 = [int(x[:-2]) for x in _t53 if x.endswith("fr")]
+check("J1a 좁은 용어 컬럼은 auto, 나머지는 fr", _t53[0] == "auto" and len(_fr53) == 2, f"{_t53}")
+check("J1b 내용 최대 컬럼이 가장 넓다", _fr53[-1] == max(_fr53), f"{_t53}")
+check("J1c 라틴 컬럼이 낱말 붕괴 폭으로 눌리지 않는다",
+      _fr53[0] / sum(_fr53) >= 0.15, f"{_t53}")
+check("J1c2 내용 순서와 폭 순서가 어긋나지 않는다(단조성)", _fr53[0] <= _fr53[1], f"{_t53}")
+check("J1d 끊을 수 없는 토큰 폭 — CJK는 어디서나 끊긴다",
+      md2typ.unbreakable_width("Employment") == 10
+      and md2typ.unbreakable_width("주택의 매매·임대") <= 2,
+      f'{md2typ.unbreakable_width("Employment")} / {md2typ.unbreakable_width("주택의 매매·임대")}')
+check("J1d2 raw 경로의 이스케이프가 낱말 폭을 부풀리지 않는다",
+      md2typ.unbreakable_width('#raw("C:\\\\tmp\\\\foo")') == 10)
+# 하한이 정상 비례를 덮지 않는다
+_p12 = _tbl([["가", "나"], [_long, _long + _long], [_long, _long + _long]])
+_wp = [int(x[:-2]) for x in _p12]
+check("J1e 정상 비례는 하한에 눌리지 않는다", 1.2 <= _wp[1] / _wp[0] <= 2.2,
+      f"{_p12} 비={_wp[1]/_wp[0]:.2f}")
+
+# J2 (N-4) 행두 중점 금칙 — 문자는 그대로, 개행만 막는다
+_wj = "\u2060"
+_inl = md2typ.inline(md2typ.MD.parseInline("race · color 와 매매·임대")[0].children)
+check("J2a 모든 가운뎃점 앞에 WORD JOINER", _inl.count(_wj) == _inl.count("·") == 2, repr(_inl))
+check("J2b 가운뎃점 자체는 보존(표기 무변경)", "race \u2060· color" in _inl, repr(_inl))
+check("J2c 폭 계산은 불변(형식문자 폭 0)",
+      md2typ.visible_width(_inl) == md2typ.visible_width(_inl.replace(_wj, "")))
+check("J2d 중복 삽입 없음", md2typ.no_break_interpunct(_inl) == _inl)
+check("J2e 게이트 대조 정규화가 형식문자를 지운다",
+      qc_gate.norm("race " + _wj + "· color") == "race·color"
+      and tocgate._norm("race " + _wj + "· color") == "race·color")
+check("J2f inline 밖 summary·caption도 공통 금칙 처리",
+      md2typ.esc("리스크·모니터링") == "리스크" + _wj + "·모니터링")
+
+# J3 (N-5) 문항 10 보기가 문항에 중첩된다
+_q = md_to_typ("# 장\n\n9. 아홉?\n   - ① 가\n   - ② 나\n\n10. 열?\n    - ① 가\n    - ② 나\n")
+_nested = _q.count("#set list(marker: []);")
+check("J3a 문항 9·10 모두 보기 리스트가 중첩된다", _nested == 2, f"중첩 {_nested}개")
+check("J3b 형제 리스트로 떨어지지 않는다", _q.count("+ 열?") == 1 and "\n- ① 가" not in _q, _q[-200:])
+_bad = md_to_typ("# 장\n\n10. 열?\n   - ① 가\n")   # 3칸 = CommonMark상 형제
+check("J3c 3칸 들여쓰기는 (정본대로) 중첩되지 않는다 — 원고 정규화가 필요한 이유",
+      "+ 열?" in _bad and "#[" in _bad and _bad.index("#[") > _bad.index("+ 열?"), _bad[-140:])
+
+
 print("\n" + "=" * 60)
 print(f"PASS {len(OK)} / FAIL {len(FAIL)}")
 if FAIL:

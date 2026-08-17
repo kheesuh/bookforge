@@ -58,6 +58,9 @@ ROLE_CODES = {"PART_DIVIDER", "FULL_BLEED_PLATE", "EXEC_SUMMARY",
 
 def norm(s):
     s = unicodedata.normalize("NFKC", s)
+    # 형식문자 제거 — md2typ가 klreq 금칙(행두 중점)용으로 넣는 WORD JOINER(U+2060)가
+    # PDF 텍스트층에 남는다. 지우지 않으면 `·`가 든 제목·라벨의 원문 대조가 깨진다.
+    s = "".join(c for c in s if unicodedata.category(c) != "Cf")
     s = re.sub(r"[\s​]+", "", s)
     s = re.sub(r"[\"'‘’“”「」『』*_`~]", "", s)
     return s.replace(",", "")

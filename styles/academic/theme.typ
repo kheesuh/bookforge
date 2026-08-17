@@ -176,10 +176,15 @@
       let start-pg = here().page()
       tbl-start.update(d => { let e = d; e.insert(lab, start-pg); e })
       // 라벨 Pretendard SemiBold 9pt + 1자 공백 + 제목 Noto Serif KR 9pt (규정)
-      text(font: TT.sans-font, size: 9pt, weight: "semibold", fill: accent, lab + ".")
-      h(1em)
-      text(font: ("Noto Serif KR",), size: 9pt, fill: ink, caption)
-      v(2mm)
+      // **sticky** — 캡션과 표 첫 조각의 결속. 캡션만 앞 면에 남고 표가 넘어가면
+      // 독자는 표 없는 캡션을 읽는다(판정 N-3, 14면). 표 자체에 원자성을 걸어
+      // 해결하려 들면 안 된다 — 이어짐 61면의 머리행 반복·(계속) 체계가 죽는다.
+      // 캡션 직상단이 항 표제인 7면은 H3 블록이 이미 sticky라 3요소 체인이 된다.
+      block(sticky: true, above: 0pt, below: 2mm, {
+        text(font: TT.sans-font, size: 9pt, weight: "semibold", fill: accent, lab + ".")
+        h(1em)
+        text(font: ("Noto Serif KR",), size: 9pt, fill: ink, caption)
+      })
       // (계속) 표기 — 반복 머리 행 안의 context는 **조각마다 재평가된다**(실측 확인).
       // 그래서 조각의 면 > 표 시작 면이면 이어짐으로 판별할 수 있다. 표 위쪽에
       // 얹지 않고 머리 행 첫 칸에 붙이는 이유: 이어짐 조각은 판면 상단에서 시작해
@@ -190,9 +195,16 @@
             // place로 얹어 행 높이를 늘리지 않는다 — 셀 안에 인라인으로 넣으면
             // 좁은 첫 칼럼에서 줄바꿈돼 머리 행만 2행이 되고 옆 칸 세로 정렬이 틀어진다.
             // 이어짐 조각은 판면 상단에서 시작하므로 표 상단 룰 위 여백에 앉힐 수 있다.
+            //
+            // **폭은 셀이 아니라 판면 기준으로 잡는다.** place는 행 높이만 면제하고
+            // 폭 제약은 면제하지 않으므로, 감싸지 않으면 라벨이 첫 머리칸의 가용 폭
+            // 안에서 조판돼 좁은 칼럼(실측 32.9pt)에서 두 조각으로 파열하고 둘째 조각이
+            // 판면 안으로 침입해 반복 머리행과 겹친다(판정 N-1: 폴리오 132~134).
+            // 표는 판면 좌단에서 시작하므로 판면 폭 박스를 주면 줄바꿈이 불가능해진다.
             place(top + left, dy: -4.2mm,
-              text(font: TT.sans-font, size: 7.5pt, weight: "regular", fill: muted,
-                lab + " (계속)"))
+              box(width: TT.trim.w - TT.margin.left - TT.margin.right,
+                text(font: TT.sans-font, size: 7.5pt, weight: "regular", fill: muted,
+                  lab + " (계속)")))
           }
           it
         }
@@ -429,7 +441,9 @@
     page(
       header: none,
       numbering: "i",
-      footer: context align(center, text(font: t.sans-font, size: 9pt, fill: ink,
+      // B-8: 앞붙이 쪽번호도 본문과 같은 Libertinus Serif 9pt tabular (규정 §러닝 시스템)
+      footer: context align(center, text(font: t.body-font, size: 9pt, fill: ink,
+        number-type: "lining", number-width: "tabular",
         counter(page).display("i"))),
       {
         v(24mm)
