@@ -108,19 +108,21 @@
     // 계선+라벨 문법에서는 조각이 표 분할과 같은 꼴(상단 계선-내용-하단 계선)로
     // 읽히므로 색면 박스 시절의 불가분성 전제가 더는 필요 없다.
     width: 100%, breakable: true,
-    // B4(주의/경고)는 상단 계선 1.2pt — book-anatomy §10
-    stroke: (top: (if kind == "warn" { 1.2pt } else { 0.6pt }) + ink,
-             bottom: 0.3pt + ink),
-    inset: (x: 0pt, top: 5pt, bottom: 6pt), above: 5mm, below: 5mm,
+    // 학습 요소는 본문보다 제목 위계와 inset이 분명해야 한다. 색면·좌측바 없이도
+    // 사방 여백과 상하 계선으로 독립된 읽기 단위를 만든다. B4(주의/경고)는 상단
+    // 계선을 1.2pt로 한 단계 더 굵힌다(book-anatomy §10).
+    stroke: (top: (if kind == "warn" { 1.2pt } else { 0.8pt }) + ink,
+             bottom: 0.4pt + ink),
+    inset: (left: 8pt, right: 8pt, top: 9pt, bottom: 10pt), above: 5mm, below: 5mm,
     {
       set text(size: 9.5pt)
       set par(leading: 6.5pt, first-line-indent: 0em)
       if label != none {
         // sticky — 분할 시 라벨만 앞 면에 홀로 남는 것을 막는다
         block(sticky: true, above: 0pt, below: 0pt,
-          text(font: TT.sans-font, weight: "semibold", size: 9pt, tracking: 0.05em,
+          text(font: TT.sans-font, weight: "semibold", size: 10.5pt, tracking: 0em,
             fill: if kind == "warn" { rgb("#8C2B20") } else { ink }, label))
-        v(3pt, weak: true)
+        v(6pt, weak: true)
       }
       body
     })
@@ -238,6 +240,16 @@
   } else { "" }
 }
 
+// 정식 표제와 러닝헤드용 짧은 표제는 역할이 다르다. 긴 괄호형 부제는 자동으로
+// 걷고, book.json의 running_titles가 있으면 장/절 번호 키(예: "4.6")로 우선한다.
+// fit-trunc는 마지막 안전장치일 뿐, 의도된 짧은 제목을 대신하지 않는다.
+#let bf-running-title(body, key) = {
+  let full = bf-plain(body)
+  let fallback = full.split("(").first().trim()
+  let shorts = meta.at("running_titles", default: (:))
+  shorts.at(key, default: fallback)
+}
+
 // "1.2 제목" → ("1.2", "제목") / 번호가 없으면 (none, 원문)
 #let bf-split-num(s) = {
   let m = s.match(regex("^\s*([0-9]+(?:[.\-][0-9]+)*)[.)]?[ \t]+(.+)$"))
@@ -302,7 +314,7 @@
             let pw = measure(text(fill: accent, pre)).width
             text(fill: accent, pre)
             h(10pt)
-            fit-trunc(bf-plain(prev.last().body), lw - pw - 12pt)
+            fit-trunc(bf-running-title(prev.last().body, str(prev.len())), lw - pw - 12pt)
           },
           [],
           if secs.len() > 0 {
@@ -311,7 +323,7 @@
               // B-10: 헤드는 --ink (구판 우측 절 칼럼만 --muted였다)
               let nw = measure(num).width
               num
-              fit-trunc(bf-plain(secs.last().body), rw - nw - 2pt)
+              fit-trunc(bf-running-title(secs.last().body, num.trim()), rw - nw - 2pt)
             })
           } else { [] })
         v(1.5mm)

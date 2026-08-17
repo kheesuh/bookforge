@@ -794,22 +794,22 @@ check("H3a 통짜 블록 = 블록 높이 + 3행송 슬랙",
       _h is not None and abs(_h - (126.3 + 3 * _pitch)) < 1.0, f"{_h}")
 _h2 = qc_gate.g7_first_unit_height(_mk([_l(74, 11.5), _l(200, 10.0)]), _pitch, _body, {"h2": 20.0})
 check("H3b H2 절제목 = 제목 + 6행 결속 + 진입 여백",
-      _h2 is not None and abs(_h2 - (11.5 * 1.08 + 6 * _pitch + 20.0)) < 1.0, f"{_h2}")
+      _h2 is not None and abs(_h2 - (11.5 * 1.08 + (6 + qc_gate.G7_HEADING_SLACK) * _pitch + 20.0)) < 1.0, f"{_h2}")
 # 뒤 문단이 길면 §3 결속 하한 2행
 _h3 = qc_gate.g7_first_unit_height(
     _mk([_l(74, 10.5)] + [_l(100 + k * _pitch, 10.0) for k in range(8)]),
     _pitch, _body, {"h3": 15.0})
 check("H3c H3 소제목 = 제목 + 2행 결속 + 진입 여백",
-      _h3 is not None and abs(_h3 - (10.5 * 1.08 + 2 * _pitch + 15.0)) < 1.0, f"{_h3}")
+      _h3 is not None and abs(_h3 - (10.5 * 1.08 + (2 + qc_gate.G7_HEADING_SLACK) * _pitch + 15.0)) < 1.0, f"{_h3}")
 # 뒤 문단이 3행이면 고아/과부 2행 하한 탓에 쪼갤 수 없어 통째로 따라온다(p307 실사례)
 _h3a = qc_gate.g7_first_unit_height(
     _mk([_l(74, 10.5), _l(100, 10.0), _l(100 + _pitch, 10.0), _l(100 + 2 * _pitch, 10.0)]),
     _pitch, _body, {"h3": 15.0})
 check("H3c2 뒤 문단 3행이면 원자 — 결속 3행",
-      _h3a is not None and abs(_h3a - (10.5 * 1.08 + 3 * _pitch + 15.0)) < 1.0, f"{_h3a}")
+      _h3a is not None and abs(_h3a - (10.5 * 1.08 + (3 + qc_gate.G7_HEADING_SLACK) * _pitch + 15.0)) < 1.0, f"{_h3a}")
 _h3b = qc_gate.g7_first_unit_height(_mk([_l(74, 10.5), _l(100, 10.0)]), _pitch, _body, {"h3": 15.0})
 check("H3c3 뒤 문단 1행이어도 §3 하한 2행 아래로 안 내려간다",
-      _h3b is not None and abs(_h3b - (10.5 * 1.08 + 2 * _pitch + 15.0)) < 1.0, f"{_h3b}")
+      _h3b is not None and abs(_h3b - (10.5 * 1.08 + (2 + qc_gate.G7_HEADING_SLACK) * _pitch + 15.0)) < 1.0, f"{_h3b}")
 # 리스트 항목은 원자 — 항목 전체 + 진입 여백, 결속 가산 없음
 _hl = qc_gate.g7_first_unit_height(
     _mk([{"y0": 74, "y1": 84.8, "size": 10.0, "text": "• 첫 항목의 첫 줄", "x1": 0},
@@ -834,6 +834,12 @@ check("H3e 2행으로 접힌 표제는 전체가 결속 단위",
       _hw is not None and _hw > 11.5 * 1.08 + 6 * _pitch, f"{_hw}")
 check("H3f 표제가 면 위쪽이 아니면 대상 아님",
       qc_gate.g7_first_unit_height(_mk([_l(300, 11.5)]), _pitch, _body) is None)
+_prev_text = {"frame": (0, 0, 100, 100), "reach": 0.70, "_blocks": []}
+_prev_block = {"frame": (0, 0, 100, 100), "reach": 0.70, "_blocks": [(40, 75)]}
+check("H3j 일반 본문 면의 잔여는 reach 그대로",
+      abs(qc_gate.g7_remaining_height(_prev_text, 10) - 30) < 0.01)
+check("H3k 면 끝 계선 블록은 블록 하단+trailing 행송을 점유",
+      abs(qc_gate.g7_remaining_height(_prev_block, 10) - 15) < 0.01)
 
 
 # H4 refit — 꼬리 축과 중간면 축 분리 (③) + 자간 대역 (④)
@@ -981,6 +987,22 @@ check("J3b 형제 리스트로 떨어지지 않는다", _q.count("+ 열?") == 1 
 _bad = md_to_typ("# 장\n\n10. 열?\n   - ① 가\n")   # 3칸 = CommonMark상 형제
 check("J3c 3칸 들여쓰기는 (정본대로) 중첩되지 않는다 — 원고 정규화가 필요한 이유",
       "+ 열?" in _bad and "#[" in _bad and _bad.index("#[") > _bad.index("+ 열?"), _bad[-140:])
+
+
+# ============ K. Academic 학습서형 콜아웃·러닝헤드 (2026-08-17)
+print("\n=== K. Academic 학습서 레이아웃 ===")
+_academic_theme = (REPO / "styles/academic/theme.typ").read_text(encoding="utf-8")
+_academic_style = (REPO / "styles/academic/STYLE.md").read_text(encoding="utf-8")
+check("K1 콜아웃 사방 inset 계약",
+      "inset: (left: 8pt, right: 8pt, top: 9pt, bottom: 10pt)" in _academic_theme)
+check("K2 콜아웃 제목 10.5pt > 본문 9.5pt + 6pt 간격",
+      'size: 10.5pt' in _academic_theme and 'v(6pt, weak: true)' in _academic_theme
+      and "정의·정리 박스 제목 10.5·본문 9.5" in _academic_style)
+check("K3 short running title 메타 경로",
+      '#let bf-running-title' in _academic_theme and 'running_titles' in _academic_theme
+      and 'fit-trunc(bf-running-title' in _academic_theme)
+check("K4 Academic 자간 상한이 pagination ±0.015em과 일치",
+      "+0.015em 초과" in _academic_style and "0em 초과" not in _academic_style)
 
 
 print("\n" + "=" * 60)

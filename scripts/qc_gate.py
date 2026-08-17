@@ -335,6 +335,7 @@ G8_GAP_CAP = 0.45
 # 표제는 "뒤 본문과 결속"되므로 결속 행수를 더해야 한다.
 G7_H2_BIND = 6   # §3 개면: 앞 면 잔여가 `절 제목 + 본문 6줄`을 못 담으면 새 면
 G7_H3_BIND = 2   # §3 결속: 제목은 뒤 본문 2행과 결속
+G7_HEADING_SLACK = 0.60  # Typst 표제 break 비용(실측 p335: 명문 산식보다 0.57행송 큼)
 # §3 고아/과부 하한 2행 → n행 문단은 (k, n−k) 둘 다 2 이상이어야 쪼갤 수 있다.
 # 즉 **3행 이하 문단은 원자**라 통째로 이월된다 — 제목 뒤 문단이 3행이면 결속 비용도 3행이다.
 G7_ATOMIC_MAX = 3
@@ -404,7 +405,7 @@ def g7_first_unit_height(nxt, pitch, body_size, leads=None):
         end, _ = _g7_unit_lines(ls, 0, pitch, sz)
         h = end - ls[0]["y0"]
         if sz >= G8_HEAD_RATIO * body_size:
-            return h + G7_H2_BIND * pitch + (lead.get("h2") or 0.0)
+            return h + (G7_H2_BIND + G7_HEADING_SLACK) * pitch + (lead.get("h2") or 0.0)
         # H3: 뒤 문단이 3행 이하면 쪼갤 수 없어 통째로 따라온다(§3 고아/과부 2행)
         nxt_i = next((k for k, l in enumerate(ls) if l["y0"] >= end), None)
         bind = G7_H3_BIND
@@ -413,12 +414,29 @@ def g7_first_unit_height(nxt, pitch, body_size, leads=None):
             # 2~3행 문단은 원자라 통째로 따라온다. 그 밖에는 §3 결속 하한 2행.
             if G7_H3_BIND <= plines <= G7_ATOMIC_MAX:
                 bind = plines
-        return h + bind * pitch + (lead.get("h3") or 0.0)
+        return h + (bind + G7_HEADING_SLACK) * pitch + (lead.get("h3") or 0.0)
     if G7_LIST_RE.match(ls[0]["text"]):
         # 리스트 항목은 원자다 — 항목 전체가 통째로 이월된다(§3 고아/과부 2행)
         end, _ = _g7_unit_lines(ls, 0, pitch, sz)
         return (end - ls[0]["y0"]) + (lead.get("list") or 0.0)
     return None
+
+
+def g7_remaining_height(page, pitch):
+    """현재 면에 실제로 남은 높이(pt).
+
+    reach는 G8 오염을 막기 위해 텍스트와 큰 객체만으로 계산하므로, 계선으로 복원한
+    콜아웃·표(`_blocks`)의 하단과 그 블록이 데리고 다니는 아래 여백은 포함하지 않는다.
+    마지막 텍스트가 블록 안/직후에 있으면 블록 하단 + 1행송을 점유한 것으로 본다.
+    일반 본문 면은 종전 reach 계산을 그대로 쓴다.
+    """
+    _, ft, _, fb = page["frame"]
+    text_bottom = ft + page["reach"] * (fb - ft)
+    blocks = page.get("_blocks", [])
+    block_bottom = max((b for _, b in blocks), default=None)
+    if block_bottom is not None and block_bottom >= text_bottom - pitch:
+        return max(0.0, fb - max(text_bottom, block_bottom) - pitch)
+    return max(0.0, fb - text_bottom)
 
 
 def g8_gap_threshold(style, lines, body_size):
@@ -698,7 +716,7 @@ def main():
         first_block_h = g7_first_unit_height(nxt, pitch_ref, body_size, head_leads)
         if first_block_h is None:
             continue  # 다음 면이 결속 단위로 시작하지 않으면 밀림이 아니다
-        remaining = (1 - p["reach"]) * (p["frame"][3] - p["frame"][1])
+        remaining = g7_remaining_height(p, pitch_ref)
         if first_block_h > remaining:
             float_pushed.add(p["page"])
     body_last = max((p["page"] for p in pages
