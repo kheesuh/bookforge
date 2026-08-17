@@ -276,7 +276,8 @@
 }
 
 // 표: 콘텐츠 [표] 캡션 계약 — 캡션이 실재할 때만 <표 n-m> 라벨, 출처는 콘텐츠가 준 것만
-#let bf-tbl(caption: none, source: none, body) = block(breakable: false, above: 6mm, below: 6mm, width: 100%, {
+// 표 분할 허용 — 통짜 표의 통째 이월(구멍)·판면 초과(오버플로) 방지
+#let bf-tbl(caption: none, source: none, body) = block(breakable: true, above: 6mm, below: 6mm, width: 100%, {
   if caption != none {
     context {
       biz-tbl.step()

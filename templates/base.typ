@@ -200,7 +200,9 @@
 
 #let bf-tbl-base(caption: none, source: none, t: (:), label-fmt: none, body) = {
   let t = merged(t)
-  block(breakable: false, above: 1.3em, below: 1.3em, width: 100%, {
+  // 표는 분할 가능 — 통짜 표가 남은 공간보다 크면 통째로 이월해 백면·구멍을 만든다.
+  // 머리 행 반복은 md2typ가 감싼 table.header가 담당한다.
+  block(breakable: true, above: 1.3em, below: 1.3em, width: 100%, {
     if caption != none {
       context {
         tbl-counter.step()

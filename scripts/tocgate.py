@@ -80,22 +80,34 @@ def find_toc_pages(doc, titles, search_upto=7, ch_starts=None):
     """
     # 본문 첫 면(0-idx). 앞붙이 = 이 앞 구간.
     body0 = (min(ch_starts) - 1) if ch_starts else None
-    limit = min(search_upto, doc.page_count) if body0 is None else min(body0, doc.page_count)
-    need = max(2, (len(titles) + 1) // 2)
+    if body0 is None:
+        rng = range(1, min(search_upto, doc.page_count))
+    else:
+        rng = range(1, min(body0, doc.page_count))
     hits_by_page = {}
-    for pno in range(1, max(2, limit)):
+    for pno in rng:
         text = _norm(doc[pno].get_text())
         hits_by_page[pno] = sum(1 for t in titles if _norm(t)[:10] and _norm(t)[:10] in text)
     start = None
-    for pno in sorted(hits_by_page):
-        if hits_by_page[pno] >= need:
-            start = pno
-            break
-    if start is None:  # 과반 면이 없어도, 연속 2면 합산이 과반이면 다면 목차로 인정
-        for pno in sorted(hits_by_page)[:-1]:
-            if hits_by_page[pno] >= 1 and hits_by_page[pno] + hits_by_page.get(pno + 1, 0) >= need:
+    if body0 is not None:
+        # 앞붙이가 확정된 경우: 과반 요구를 버리고 "장제목이 가장 많이 실린 면"을 시드로
+        # 삼는다. 장 수가 많으면(12장×4면) **어느 면도 과반에 못 미쳐** 시드 자체가
+        # 안 잡히거나 엉뚱한 면에 잡혔다. 시드는 어디든 되고, 아래 양방향 확장이
+        # 목차 묶음 전체를 복원한다.
+        cand = [p for p in hits_by_page if hits_by_page[p] > 0]
+        if cand:
+            start = max(cand, key=lambda p: (hits_by_page[p], -p))
+    else:
+        need = max(2, (len(titles) + 1) // 2)
+        for pno in sorted(hits_by_page):
+            if hits_by_page[pno] >= need:
                 start = pno
                 break
+        if start is None:  # 과반 면이 없어도, 연속 2면 합산이 과반이면 다면 목차로 인정
+            for pno in sorted(hits_by_page)[:-1]:
+                if hits_by_page[pno] >= 1 and hits_by_page[pno] + hits_by_page.get(pno + 1, 0) >= need:
+                    start = pno
+                    break
     if start is None:
         return []
     # 연속 면 확장은 "새 제목을 추가로 커버할 때만". 앞붙이 구간이 확정된 경우
@@ -106,17 +118,21 @@ def find_toc_pages(doc, titles, search_upto=7, ch_starts=None):
     def titles_on(pno):
         text = _norm(doc[pno].get_text())
         return {t for t in titles if _norm(t)[:10] and _norm(t)[:10] in text}
+    # 시드가 목차 첫 면이라는 보장이 없다(장이 많으면 최다 면이 가운데 온다) —
+    # 앞뒤 **양방향**으로 확장한다. 한 방향만 보던 구 로직은 시드 앞의 목차 면을
+    # 통째로 놓쳤고, 그 면에만 있던 장이 '제목 미발견'으로 FAIL이 됐다.
     out = [start]
     covered = titles_on(start)
-    nxt = start + 1
-    while nxt in hits_by_page and len(covered) < len(titles):
-        new = titles_on(nxt) - covered
-        if len(new) < min_new:
-            break
-        out.append(nxt)
-        covered |= new
-        nxt += 1
-    return out
+    for step in (1, -1):
+        nxt = start + step
+        while nxt in hits_by_page:
+            new = titles_on(nxt) - covered
+            if len(new) < min_new:  # 새 장이 없으면 목차 밖(표지·속표지·도비라)
+                break
+            out.append(nxt)
+            covered |= new
+            nxt += step
+    return sorted(out)
 
 
 def _title_row_band(spans, t_span, title):
@@ -130,22 +146,53 @@ def _title_row_band(spans, t_span, title):
     ntitle = _norm(title)
     y0, y1 = t_span["bbox"][1], t_span["bbox"][3]
     size = t_span["size"]
+    # 지금까지 읽어낸 제목 조각. 다음 줄은 **이어지는 부분**이어야 한다 —
+    # 단순 "제목의 부분문자열"로 보면 장 행 바로 아래의 절 행(예: 장 'Data Governance와
+    # Model Training' 아래 절 'Data Governance')이 밴드에 삼켜져 절의 쪽번호와 짝지어진다.
+    acc = _norm(t_span["text"])
     rest = sorted((s for s in spans if s is not t_span), key=lambda s: s["bbox"][1])
     grew = True
-    while grew:
+    while grew and acc != ntitle:
         grew = False
         for s in rest:
             frag = _norm(s["text"])
-            if len(frag) < 4 or frag not in ntitle:
+            if len(frag) < 2 or not frag:
                 continue
-            if abs(s["size"] - size) > 0.6:      # 절 행·쪽번호 급수는 제외
+            if abs(s["size"] - size) > 0.25:     # 랩된 줄은 같은 급수 (절 행 0.5pt 차 배제)
+                continue
+            if acc + frag not in ntitle:         # 이어지는 조각만
                 continue
             gap = s["bbox"][1] - y1
             if -1 <= gap <= 1.5 * size:          # 바로 다음 줄만
                 y1 = max(y1, s["bbox"][3])
                 y0 = min(y0, s["bbox"][1])
+                acc += frag
                 grew = True
+                break
     return y0, y1
+
+
+def _find_title_span(spans, title):
+    """제목 행 스팬. 절 행 오탐을 피해 **제목의 처음부터 이어지는** 스팬을 우선한다.
+
+    키(앞 10자) 포함만으로 고르면 'NIST AI Risk Management Framework…' 같은 절 행이
+    장 행보다 먼저 잡혀 절의 쪽번호와 짝지어진다.
+    """
+    ntitle = _norm(title)
+    key = ntitle[:10]
+    if not key:
+        return None
+    best, best_rank = None, None
+    for s in spans:
+        ns = _norm(s["text"])
+        if key not in ns:
+            continue
+        # rank 0 = 스팬이 제목의 첫머리(장 행 또는 랩된 첫 줄), 1 = 그 외(절 행 등).
+        # 동순위면 더 많이 담은 쪽.
+        rank = (0 if ns and ntitle.startswith(ns) else 1, -len(ns))
+        if best_rank is None or rank < best_rank:
+            best, best_rank = s, rank
+    return best
 
 
 def _is_ordinal_decoration(text):
@@ -168,12 +215,17 @@ def g14a_toc_numbers(doc, titles, ch_starts):
             break
         expected = ch_starts[i] - offset
         key = _norm(title)[:10]
-        t_span, t_page = None, None
+        # 면 순서로 첫 히트를 잡으면, 앞면의 절 행이 뒷면의 장 행을 이긴다.
+        # 묶음 전체에서 "제목 첫머리로 시작하는" 스팬을 우선 선별한다.
+        t_span, t_page, t_rank = None, None, None
         for p in toc_pages:
-            hit = [s for s in spans_by_page[p] if key and key in _norm(s["text"])]
-            if hit:
-                t_span, t_page = hit[0], p
-                break
+            s = _find_title_span(spans_by_page[p], title)
+            if s is None:
+                continue
+            ns = _norm(s["text"])
+            rank = (0 if ns and _norm(title).startswith(ns) else 1, -len(ns))
+            if t_rank is None or rank < t_rank:
+                t_span, t_page, t_rank = s, p, rank
         if t_span is None:
             all_joined = _norm("".join(s["text"] for p in toc_pages for s in spans_by_page[p]))
             if key not in all_joined:

@@ -13,3 +13,4 @@
 |------|----------|------|------|
 | 2026-08-16 | 초기 구성 — 에이전트 4종(director·editor·fixer·judge) + bf-produce 오케스트레이터 + 스웜 러너 | 전체 | orchestration.md 스케치의 실체화 (codex 집필 + Claude 판정) |
 | 2026-08-16 | 풀런 결함 9종 환류 — 교정교열 정본 신설(copyediting.md)·G16 게이트·러닝헤드 실측 말줄임·제목 여백 그리드·좌측바 콜아웃 전권 폐지·표 auto/fr 혼합·목차 grid 행·퀴즈 문법 | SKILL.md·styles/·templates/·scripts/·agents(editor·judge) | KH의 academic 풀런 실물 검수 피드백 |
+| 2026-08-17 | AIGP 실서적(383쪽) 풀런이 발굴한 계통 수리 — 표 분할(머리행 반복)·tocgate 다면 목차 양방향·G7 float 면제 복원(_blocks·결속 단위)·사유 코드 무결성(G11 honored)·refit 축 분리·G16 스웜 미러 강화 | scripts/·templates/·styles/·pagination.md·tests/ | 실서적 스트레스 테스트 — 게이트 141→PASS, 판정 C(도비라·팩 서식 안건 잔존) |

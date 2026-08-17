@@ -145,7 +145,11 @@
 }
 
 // 표: 콘텐츠가 [표] 캡션을 준 경우에만 번호 라벨. 캡션 없으면 표만 렌더.
-#let bf-tbl(caption: none, source: none, body) = block(breakable: false, above: 6mm, below: 6mm, width: 100%, {
+// 표는 분할 가능(breakable) — 통짜 표는 남은 공간보다 크면 통째로 이월해 앞 면에
+// 구멍을 내고(G7), 면보다 크면 하단이 판면 밖으로 넘쳐 글자가 뭉개진다(G3).
+// 분할 시 각 조각은 booktabs 3선을 온전히 갖는다: 상단 1.0pt + 반복 머리 행 +
+// 머리 아래 0.4pt + 하단 1.0pt(래퍼 stroke가 조각마다 그린다 — longtable 관행).
+#let bf-tbl(caption: none, source: none, body) = block(breakable: true, above: 6mm, below: 6mm, width: 100%, {
   if caption != none {
     context {
       tbl-counter.step()
@@ -303,9 +307,12 @@
   set table(stroke: none, inset: (x: 8pt, y: 5pt))
   show table: it => { set text(size: 9pt, font: t.sans-font); it }
   // booktabs 3선: top 1.0 / 헤더 아래 0.4 / bottom 1.0 (bottom은 bf-tbl 래퍼가 긋는다)
+  // 헤더 아래 룰은 **머리 행의 bottom**으로 건다(구판은 다음 행의 top이었다) —
+  // 표가 분할되면 반복된 머리 행 셀의 y는 0이지만 그 아래 본문 행은 y가 1이 아니라
+  // 이어지는 번호라, top: y==1 방식은 뒷조각에서 머리 아래 룰이 사라진다(실측).
   set table(stroke: (x, y) => (
-    top: if y == 0 { 1pt + ink } else if y == 1 { 0.4pt + rule-c } else { none },
-    bottom: none,
+    top: if y == 0 { 1pt + ink } else { none },
+    bottom: if y == 0 { 0.4pt + rule-c } else { none },
   ))
   show table.cell.where(y: 0): it => text(weight: "semibold", it)
   show table.cell: set par(justify: false)  // 셀 양끝맞춤 파열 방지

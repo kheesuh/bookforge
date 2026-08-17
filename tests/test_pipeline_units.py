@@ -597,6 +597,275 @@ if not _ran:
     print("  [SKIP] F5 실물 픽스처 부재 — /tmp/bf-typo-fix")
 
 
+
+# ============ G. tocgate 다면(3면 이상) 목차 · 시드 위치 · 절 행 충돌 (2026-08-17)
+# 실서적(AIGP 12장·목차 5면)에서 시드가 목차 가운데 잡히고 **앞쪽 목차 면**이 통째로
+# 누락돼 G14-A 4건이 났다. 장이 많으면 어느 면도 과반에 못 미친다는 것이 뿌리다.
+print("\n=== G. tocgate 다면 목차·시드 위치·절 행 충돌 ===")
+
+G_TITLES = [f"Chapter {c} Subject Matter" for c in
+            ("Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot",
+             "Golf", "Hotel", "India", "Juliet", "Kilo", "Lima")]
+G_STARTS = [6, 10, 14, 18, 22, 26, 30, 34, 38, 42, 46, 50]   # offset 5 → 인쇄 1,5,9,…
+
+
+def make_multi_toc(layout, sections=()):
+    """layout = 목차 면별 장 인덱스(0-based) 목록. sections = (면, y, 텍스트, 쪽번호).
+
+    목차는 0-idx 1부터 연속 배치하고 본문은 G_STARTS(1-idx)에서 시작한다.
+    """
+    doc = _fitz.open()
+    for _ in range(60):
+        doc.new_page(width=420, height=595)
+    doc[0].insert_text((60, 100), "Book Title", fontsize=20)
+    for pi, chs in enumerate(layout):
+        page = doc[1 + pi]
+        for row, ci in enumerate(chs):
+            y = 120 + row * 40
+            page.insert_text((70, y), G_TITLES[ci], fontsize=10.5)          # 장 행
+            page.insert_text((370, y), str(G_STARTS[ci] - 5), fontsize=10)  # 쪽번호
+    for (pi, y, text, num) in sections:                                     # 절 행(9.5pt)
+        doc[1 + pi].insert_text((110, y), text, fontsize=9.5)
+        doc[1 + pi].insert_text((372, y), str(num), fontsize=9.5)
+    for st, t in zip(G_STARTS, G_TITLES):                                   # 도비라
+        doc[st - 1].insert_text((60, 120), t, fontsize=16)
+    doc.set_toc([[1, t, st] for t, st in zip(G_TITLES, G_STARTS)])
+    return doc
+
+
+def toc_of(doc):
+    return tocgate.find_toc_pages(doc, G_TITLES, ch_starts=G_STARTS)
+
+
+# G1 시드가 가운데 면 — 앞뒤 양방향 확장이 모두 필요하다
+mid = make_multi_toc([[0, 1], [2, 3, 4], [5, 6, 7, 8], [9, 10, 11]])
+tp = toc_of(mid)
+a, pairs = tocgate.g14a_toc_numbers(mid, G_TITLES, G_STARTS)
+check("G1a 시드 가운데 — 목차 4면 전부 인식", tp == [1, 2, 3, 4], f"tp={tp}")
+check("G1b 12장 G14-A PASS", not a, f"problems={a[:3]}")
+check("G1c 12장 전부 인쇄=폴리오",
+      len(pairs) == 12 and all(x["printed"] == x["expected"] for x in pairs),
+      f"불일치={[(x['printed'], x['expected']) for x in pairs if x['printed'] != x['expected']]}")
+
+# G2 시드가 마지막 목차 면 — 후방(앞쪽) 확장만으로 복원해야 한다
+last = make_multi_toc([[0], [1, 2], [3, 4, 5], [6, 7, 8, 9, 10, 11]])
+tp = toc_of(last)
+a2, pairs2 = tocgate.g14a_toc_numbers(last, G_TITLES, G_STARTS)
+check("G2a 시드 마지막 면 — 목차 4면 전부 인식", tp == [1, 2, 3, 4], f"tp={tp}")
+check("G2b G14-A PASS", not a2 and len(pairs2) == 12, f"problems={a2[:3]}")
+
+# G3 시드가 첫 면 — 전방 확장만 (구 동작 유지 확인)
+first = make_multi_toc([[0, 1, 2, 3, 4, 5], [6, 7], [8, 9], [10, 11]])
+tp = toc_of(first)
+a3, _ = tocgate.g14a_toc_numbers(first, G_TITLES, G_STARTS)
+check("G3a 시드 첫 면 — 목차 4면 전부 인식", tp == [1, 2, 3, 4], f"tp={tp}")
+check("G3b G14-A PASS", not a3, f"problems={a3[:3]}")
+check("G3c 확장이 본문(도비라)까지 안 번짐", max(tp) < min(G_STARTS) - 1, f"tp={tp}")
+
+# G4 절 행 충돌 — 장 제목의 앞 10자를 품은 절 행이 장 행을 이기면 안 된다
+#    (a) 앞면의 절 행 vs 뒷면의 장 행  (b) 장 행 바로 아래 절 행(밴드 삼킴)
+coll = make_multi_toc(
+    [[0, 1], [2, 3, 4], [5, 6, 7, 8], [9, 10, 11]],
+    sections=[(1, 300, "Chapter India Subject Framework Overview", 3),   # ch9 키 선점(앞면)
+              (2, 330, "Chapter Golf Subject", 7)])                      # ch7 부분문자열
+a4, pairs4 = tocgate.g14a_toc_numbers(coll, G_TITLES, G_STARTS)
+bad4 = [(x["title"][:22], x["printed"], x["expected"])
+        for x in pairs4 if x["printed"] != x["expected"]]
+check("G4a 절 행이 있어도 G14-A PASS", not a4, f"problems={a4[:3]}")
+check("G4b 앞면 절 행이 장 행을 이기지 않음(ch9)", not bad4, f"불일치={bad4}")
+
+# G5 밴드 삼킴 회귀 — 장 행 바로 아래 절 행이 제목의 접두사여도 밴드에 안 들어간다
+#    (실서적 재현: 장 'Data Governance와 Model Training' / 절 'Data Governance')
+_t = "Data Governance and Model Training"
+_sp = [{"text": _t, "size": 10.5, "bbox": (111, 407, 276, 419)},
+       {"text": "Data Governance", "size": 10.0, "bbox": (150, 423, 228, 435)}]
+_band = tocgate._title_row_band(_sp, _sp[0], _t)
+check("G5a 아래 절 행을 밴드에 삼키지 않음", _band[1] < 423, f"band={_band}")
+_sp2 = [{"text": "Data Governance and", "size": 10.5, "bbox": (111, 407, 276, 419)},
+        {"text": "Model Training", "size": 10.5, "bbox": (111, 423, 228, 435)}]
+_band2 = tocgate._title_row_band(_sp2, _sp2[0], _t)
+check("G5b 진짜 랩된 둘째 줄은 여전히 흡수", _band2[1] >= 435, f"band={_band2}")
+
+# G6 감도 — 다면 목차에서도 틀린 쪽번호는 적발 (판정 기준 불변)
+wrong = make_multi_toc([[0, 1], [2, 3, 4], [5, 6, 7, 8], [9, 10, 11]])
+wrong[1].add_redact_annot(_fitz.Rect(360, 108, 400, 124), fill=(1, 1, 1))
+wrong[1].apply_redactions()
+wrong[1].insert_text((370, 120), "88", fontsize=10)      # ch1 쪽번호 오염
+a5, _ = tocgate.g14a_toc_numbers(wrong, G_TITLES, G_STARTS)
+check("G6 다면 목차의 틀린 쪽번호 적발", any("88" in x for x in a5), f"problems={a5[:2]}")
+
+for _d in (mid, last, first, coll, wrong):
+    _d.close()
+
+# G7 실서적(있을 때만) — AIGP 12장·목차 5면 사본
+_aigp = Path("/tmp/bf-aigp")
+if (_aigp / "draft/book.pdf").exists():
+    _t2 = [c["title"].strip() for c in json.loads((_aigp / "outline.json").read_text())["chapters"]]
+    _dd = _fitz.open(_aigp / "draft/book.pdf")
+    _cs = sorted({p for l, _, p in _dd.get_toc(simple=True) if l == 1})
+    _tp = tocgate.find_toc_pages(_dd, _t2, ch_starts=_cs)
+    _pa, _pp = tocgate.g14a_toc_numbers(_dd, _t2, _cs)
+    _pb = tocgate.g14b_key_color(_dd, _t2, _cs, None)
+    check(f"G7 실서적 AIGP G14-A/B PASS (12장, 목차 {len(_tp)}면)",
+          not _pa and not _pb and len(_pp) == 12, f"A={_pa[:2]} B={_pb[:1]}")
+    _dd.close()
+else:
+    print("  [SKIP] G7 실서적 사본 부재 — /tmp/bf-aigp")
+
+
+
+# ============ H. G7 float 밀림 면제 복구 · 사유 코드 무결성 (2026-08-17)
+# 계선+라벨 재설계 이후 콜아웃·표 경계가 0.3~1.2pt 헤어라인뿐이라 pagemetrics의
+# `height > 2` 필터에 전부 걸려 _objs가 전권 0이 됐고, G7 float 면제가 죽었다.
+print("\n=== H. G7 면제 복구 · role 무결성 ===")
+
+import pagemetrics  # noqa: E402
+
+
+# H1 괘선 블록 복원 — 순수 함수
+def _r(y0, y1):
+    return (y0, y1)
+
+
+def _l(y0, size, n=20):
+    return {"y0": y0, "y1": y0 + size * 1.08, "size": size, "text": "x" * n, "x1": 0}
+
+
+# 콜아웃: 상단 0.6pt + 하단 0.3pt, 내부는 본문보다 작은 급수
+blk = pagemetrics._rule_blocks([_r(100, 100.6), _r(260, 260.3)],
+                               [_l(110, 9.5), _l(130, 9.5), _l(150, 9.5)], 10.0)
+check("H1a 콜아웃 상/하 계선 사이가 한 블록", blk == [(100.0, 260.3)], f"{blk}")
+
+# 두 블록이 본문을 사이에 두고 떨어져 있으면 병합하지 않는다(과대평가 = 면제 남발)
+blk = pagemetrics._rule_blocks([_r(100, 100.6), _r(160, 160.3), _r(300, 300.6), _r(360, 360.3)],
+                               [_l(110, 9.5), _l(200, 10.0), _l(230, 10.0), _l(320, 9.5)], 10.0)
+check("H1b 사이에 본문이 끼면 별개 블록", blk == [(100.0, 160.3), (300.0, 360.3)], f"{blk}")
+
+# 표(선 3개: 상단·머리·하단)는 급수가 같으므로 하나로 이어 붙인다
+blk = pagemetrics._rule_blocks([_r(100, 101), _r(120, 120.4), _r(300, 301)],
+                               [_l(105, 9.0), _l(130, 9.0), _l(200, 9.0)], 10.0)
+check("H1c 선 3개짜리 표는 상단~하단 한 블록", blk == [(100.0, 301.0)], f"{blk}")
+
+# 표(9pt) 바로 아래 콜아웃(9.5pt)이 붙어 있으면 급수 변화로 끊는다
+blk = pagemetrics._rule_blocks([_r(100, 101), _r(200, 201), _r(220, 220.6), _r(340, 340.3)],
+                               [_l(110, 9.0), _l(150, 9.0), _l(230, 9.5), _l(300, 9.5)], 10.0)
+check("H1d 급수가 바뀌면 별개 블록(표 9pt → 콜아웃 9.5pt)",
+      blk == [(100.0, 201.0), (220.0, 340.3)], f"{blk}")
+check("H1e 선이 하나뿐이면 블록 없음", pagemetrics._rule_blocks([_r(100, 100.3)], [], 10.0) == [])
+check("H1f 선이 없으면 블록 없음", pagemetrics._rule_blocks([], [], 10.0) == [])
+
+# H2 얇은 괘선이 실제 PDF에서 살아 돌아오는가 — 근본 버그(height>2 필터) 회귀
+_pdf = Path(tempfile.mkdtemp()) / "rules.pdf"
+_d = _fitz.open()
+for _ in range(3):
+    _d.new_page(width=420, height=595)
+_fr_mm = [26, 22, 34.9, 25]           # academic body_frame_mm
+_MM = 72 / 25.4
+_ft, _flx = _fr_mm[0] * _MM, _fr_mm[1] * _MM
+_frx = 420 - _fr_mm[3] * _MM
+for _pg in _d:
+    for _k in range(12):          # 본문 급수가 최빈이 되도록 충분히
+        _pg.insert_text((_flx, _ft + 200 + _k * 17.5), "body text line here " * 3, fontsize=10)
+# 2면 상단에 0.3pt 전폭 괘선 2줄 + 그 사이 9.5pt 텍스트 = 통짜 콜아웃
+_p2 = _d[1]
+_p2.draw_line(_fitz.Point(_flx, _ft + 2), _fitz.Point(_frx, _ft + 2), width=0.3)
+for _k in range(5):
+    _p2.insert_text((_flx + 4, _ft + 20 + _k * 16), "callout body text", fontsize=9.5)
+_p2.draw_line(_fitz.Point(_flx, _ft + 110), _fitz.Point(_frx, _ft + 110), width=0.3)
+_d.save(str(_pdf)); _d.close()
+_m = pagemetrics.analyze(_pdf, _fr_mm)
+_blocks = _m["pages"][1]["_blocks"]
+check("H2a 0.3pt 전폭 괘선 블록이 _blocks로 복원된다", len(_blocks) == 1, f"{_blocks}")
+check("H2b 그 블록 높이가 괘선 간격과 일치", _blocks and abs((_blocks[0][1] - _blocks[0][0]) - 108) < 4,
+      f"{_blocks}")
+check("H2c _objs는 건드리지 않았다(reach·ink·G8 불변 보장)",
+      all(not p["_objs"] for p in _m["pages"]), f"{[len(p['_objs']) for p in _m['pages']]}")
+
+# H3 첫 결속 단위 소요 높이 — 통짜 블록 / H2 / H3 / 본문
+_pitch, _body = 17.5, 10.0
+_frame = (50.0, 73.7, 350.0, 538.9)
+_mk = lambda lines, blocks=(): {"frame": _frame, "_lines": lines, "_objs": [],
+                                "_blocks": list(blocks)}
+_h = qc_gate.g7_first_unit_height(
+    _mk([_l(80, 9.5)], [(73.7, 200.0)]), _pitch, _body)
+check("H3a 통짜 블록 = 블록 높이 + 3행송 슬랙",
+      _h is not None and abs(_h - (126.3 + 3 * _pitch)) < 1.0, f"{_h}")
+_h2 = qc_gate.g7_first_unit_height(_mk([_l(74, 11.5), _l(200, 10.0)]), _pitch, _body, {"h2": 20.0})
+check("H3b H2 절제목 = 제목 + 6행 결속 + 진입 여백",
+      _h2 is not None and abs(_h2 - (11.5 * 1.08 + 6 * _pitch + 20.0)) < 1.0, f"{_h2}")
+# 뒤 문단이 길면 §3 결속 하한 2행
+_h3 = qc_gate.g7_first_unit_height(
+    _mk([_l(74, 10.5)] + [_l(100 + k * _pitch, 10.0) for k in range(8)]),
+    _pitch, _body, {"h3": 15.0})
+check("H3c H3 소제목 = 제목 + 2행 결속 + 진입 여백",
+      _h3 is not None and abs(_h3 - (10.5 * 1.08 + 2 * _pitch + 15.0)) < 1.0, f"{_h3}")
+# 뒤 문단이 3행이면 고아/과부 2행 하한 탓에 쪼갤 수 없어 통째로 따라온다(p307 실사례)
+_h3a = qc_gate.g7_first_unit_height(
+    _mk([_l(74, 10.5), _l(100, 10.0), _l(100 + _pitch, 10.0), _l(100 + 2 * _pitch, 10.0)]),
+    _pitch, _body, {"h3": 15.0})
+check("H3c2 뒤 문단 3행이면 원자 — 결속 3행",
+      _h3a is not None and abs(_h3a - (10.5 * 1.08 + 3 * _pitch + 15.0)) < 1.0, f"{_h3a}")
+_h3b = qc_gate.g7_first_unit_height(_mk([_l(74, 10.5), _l(100, 10.0)]), _pitch, _body, {"h3": 15.0})
+check("H3c3 뒤 문단 1행이어도 §3 하한 2행 아래로 안 내려간다",
+      _h3b is not None and abs(_h3b - (10.5 * 1.08 + 2 * _pitch + 15.0)) < 1.0, f"{_h3b}")
+# 리스트 항목은 원자 — 항목 전체 + 진입 여백, 결속 가산 없음
+_hl = qc_gate.g7_first_unit_height(
+    _mk([{"y0": 74, "y1": 84.8, "size": 10.0, "text": "• 첫 항목의 첫 줄", "x1": 0},
+         {"y0": 74 + _pitch, "y1": 84.8 + _pitch, "size": 10.0, "text": "이어지는 줄", "x1": 0},
+         {"y0": 74 + 2 * _pitch, "y1": 84.8 + 2 * _pitch, "size": 10.0, "text": "셋째 줄", "x1": 0}]),
+    _pitch, _body, {"list": 7.0})
+check("H3g 리스트 항목은 원자(항목 전체 + 진입 여백)",
+      _hl is not None and abs(_hl - ((84.8 + 2 * _pitch - 74) + 7.0)) < 1.0, f"{_hl}")
+check("H3h 번호 리스트도 인식",
+      qc_gate.g7_first_unit_height(
+          _mk([{"y0": 74, "y1": 84.8, "size": 10.0, "text": "4. 정답 ②. 해설", "x1": 0}]),
+          _pitch, _body, {"list": 7.0}) is not None)
+check("H3i 리스트가 아닌 본문 시작은 여전히 대상 아님",
+      qc_gate.g7_first_unit_height(
+          _mk([{"y0": 74, "y1": 84.8, "size": 10.0, "text": "평범한 본문 문장이다", "x1": 0}]),
+          _pitch, _body, {"list": 7.0}) is None)
+check("H3d 본문으로 시작하는 면은 면제 대상 아님",
+      qc_gate.g7_first_unit_height(_mk([_l(74, 10.0), _l(95, 10.0)]), _pitch, _body) is None)
+_hw = qc_gate.g7_first_unit_height(_mk([_l(74, 11.5), _l(90, 11.5), _l(200, 10.0)]),
+                                   _pitch, _body, {"h2": 0.0})
+check("H3e 2행으로 접힌 표제는 전체가 결속 단위",
+      _hw is not None and _hw > 11.5 * 1.08 + 6 * _pitch, f"{_hw}")
+check("H3f 표제가 면 위쪽이 아니면 대상 아님",
+      qc_gate.g7_first_unit_height(_mk([_l(300, 11.5)]), _pitch, _body) is None)
+
+
+# H4 refit — 꼬리 축과 중간면 축 분리 (③) + 자간 대역 (④)
+import refit  # noqa: E402
+
+_pg = lambda reach, lines, img=0.0: {"reach": reach, "lines": lines, "imgarea": img}
+# 꼬리는 정상, 중간면 하나가 미달 — 예전엔 하나의 ok로 AND라 꼬리 해가 폐기됐다
+_by = {1: _pg(0.95, 27), 2: _pg(0.62, 27), 3: _pg(0.95, 27), 4: _pg(0.88, 20)}
+t_ok, m_ok, tr, tl, mm = refit.judge_chapter(_by, (1, 4), "academic", 27, None)
+check("H4a 축 분리 — 꼬리 OK / 중간면 FAIL이 따로 나온다",
+      t_ok is True and m_ok is False, f"tail={t_ok} mid={m_ok} mid_min={mm}")
+_by2 = {1: _pg(0.95, 27), 2: _pg(0.95, 27), 3: _pg(0.30, 4)}
+t2, m2, *_ = refit.judge_chapter(_by2, (1, 3), "academic", 27, None)
+check("H4b 꼬리 6행 미만이면 꼬리 축 FAIL", t2 is False and m2 is True, f"tail={t2} mid={m2}")
+_by3 = {1: _pg(0.95, 27), 2: _pg(0.95, 27), 3: _pg(0.95, 24)}
+t3, m3, *_ = refit.judge_chapter(_by3, (1, 3), "academic", 27, None)
+check("H4c 두 축 모두 통과", t3 is True and m3 is True, f"tail={t3} mid={m3}")
+check("H4d 전면 도판 중간면은 중간면 축에서 제외",
+      refit.judge_chapter({1: _pg(0.95, 27), 2: _pg(0.10, 2, img=0.9), 3: _pg(0.95, 24)},
+                          (1, 3), "academic", 27, None)[1] is True)
+check("H4e CAP_POS가 정본 ±15/1000em과 일치", refit.CAP_POS == 0.015, f"{refit.CAP_POS}")
+check("H4f 양의 그리드가 그 대역까지 있다",
+      max(refit.POS_GRID) == 0.015 and 0.0125 in refit.POS_GRID, f"{refit.POS_GRID}")
+check("H4g refit MID_MIN이 qc_gate MID_ROLE_MIN과 동일",
+      refit.MID_MIN == qc_gate.MID_ROLE_MIN, f"{refit.MID_MIN} vs {qc_gate.MID_ROLE_MIN}")
+
+# H5 정본 동기화 — 사유 코드 7종 (⑤)
+_pag = (REPO / "references/pagination.md").read_text(encoding="utf-8")
+check("H5a pagination.md가 코드 7종으로 갱신됐다", "코드 7종" in _pag and "코드 6종" not in _pag)
+check("H5b 7종 전부가 문서에 실재", all(c in _pag for c in qc_gate.ROLE_CODES),
+      str([c for c in qc_gate.ROLE_CODES if c not in _pag]))
+check("H5c 구현 ROLE_CODES가 7종", len(qc_gate.ROLE_CODES) == 7, str(len(qc_gate.ROLE_CODES)))
+
+
 print("\n" + "=" * 60)
 print(f"PASS {len(OK)} / FAIL {len(FAIL)}")
 if FAIL:

@@ -39,6 +39,61 @@ def collect_furniture(doc, ratio=0.6):
             {k for k, c in img_c.items() if c >= thr})
 
 
+# ---- 괘선으로 둘러싸인 블록(콜아웃·표) 복원 ----
+# 계선+라벨 재설계 이후 콜아웃·표의 경계는 **높이 0.3~1.2pt의 전폭 괘선**뿐이다.
+# 객체 수집의 `height > 2` 필터(헤어라인·밑줄 배제 목적)에 전부 걸려, 표 108·콜아웃
+# 127개짜리 책의 `_objs`가 388면 전원 0이 됐다 — G7의 float 밀림 면제가 전권에서
+# 죽었다. 괘선을 **별도 키**(`_blocks`)로 복원한다: `_objs`에 넣으면 reach·ink·G8-gap이
+# 함께 움직여 이미 캘리브레이션한 게이트를 흔든다.
+RULE_MAX_H = 2.0    # pt — 이하를 '선'으로 본다 (실측 0.3/0.5/0.6/1.0/1.2)
+RULE_MIN_W = 0.30   # 판면 폭 대비 — 실측된 블록 괘선은 전부 0.97
+
+
+def _rule_blocks(rules, lines, body_size):
+    """괘선 사이를 **본문 급수 행의 유무**로 갈라 블록 스팬을 만든다.
+
+    단순히 둘씩 짝지으면 선이 3개인 블록(표: 상단·머리·하단)에서 짝이 어긋나
+    이후 모든 쌍이 밀리고, 서로 다른 두 블록 사이의 본문 구간이 한 블록으로
+    삼켜진다(과대평가 = 면제 남발). 대신 블록 **내부는 본문보다 작은 급수**라는
+    사실을 쓴다 — 콜아웃 본문 0.95em·표 셀 9pt vs 본문 10pt. 선과 선 사이에
+    본문 급수 행이 없으면 같은 블록으로 이어 붙이고, 나타나면 거기서 끊는다.
+    """
+    rs = sorted({(round(a, 1), round(b, 1)) for a, b in rules})   # 두 수집 경로의 중복 제거
+    if len(rs) < 2:
+        return []
+    def region(lo, hi):
+        """(본문 급수 행 존재, 지배 급수) — 두 괘선 사이 구간의 성격."""
+        seg = [l for l in lines if lo < (l["y0"] + l["y1"]) / 2 < hi]
+        if not seg:
+            return False, None
+        w = {}
+        for l in seg:
+            w[round(l["size"], 1)] = w.get(round(l["size"], 1), 0) + len(l["text"])
+        has_body = any(abs(l["size"] - body_size) <= 0.25 for l in seg)
+        return has_body, max(w, key=w.get)
+
+    out, i = [], 0
+    while i < len(rs) - 1:
+        j, base = i, None
+        while j + 1 < len(rs):
+            has_body, dom = region(rs[j][1], rs[j + 1][0])
+            if has_body or dom is None:
+                # 본문이 끼면 다른 블록이고, 글이 아예 없으면 블록 내부가 아니다
+                # (맞붙은 두 블록의 '하단선~상단선' 구간이 여기 해당한다)
+                break
+            if base is None:
+                base = dom
+            elif abs(dom - base) > 0.25:
+                break               # 급수가 바뀌면 다른 블록(표 9pt → 콜아웃 9.5pt)
+            j += 1
+        if j > i:
+            out.append((rs[i][0], rs[j][1]))
+            i = j + 1
+        else:
+            i += 1                  # 짝을 못 찾은 선은 버린다(과소평가가 안전한 오차)
+    return out
+
+
 def _union_len(segs):
     if not segs:
         return 0.0
@@ -101,13 +156,19 @@ def analyze(pdf_path, frame_mm):
                 if not inter.is_empty and inter.height > 2 and inter.width > 2:
                     objs.append((inter.y0, inter.y1))
         vec_union = fitz.Rect()  # 비가구 벡터 드로잉 합집합 — SVG 도해 면적 (vecarea)
+        rules = []               # 넓은 수평 괘선 = 블록 경계 마커 (아래 _rule_blocks)
         for dr in page.get_drawings():
             r = dr["rect"]
             key = (round(r.x0), round(r.y0), round(r.x1), round(r.y1))
             if key in fdraw:
                 continue
             inter = fitz.Rect(r) & fitz.Rect(fl, ft, fr, fb)
-            if not inter.is_empty and inter.height > 2 and inter.width > 2:
+            if inter.is_empty:
+                continue
+            if inter.height <= RULE_MAX_H and inter.width >= RULE_MIN_W * (fr - fl):
+                rules.append((inter.y0, inter.y1))
+                continue
+            if inter.height > 2 and inter.width > 2:
                 objs.append((inter.y0, inter.y1))
                 vec_union |= inter
         # Typst가 임베드한 SVG 도해는 Form XObject라 get_drawings에 잡히지 않는다 —
@@ -120,7 +181,12 @@ def analyze(pdf_path, frame_mm):
             if key in fdraw:
                 continue
             inter = rr & fitz.Rect(fl, ft, fr, fb)
-            if not inter.is_empty and inter.height > 2 and inter.width > 2:
+            if inter.is_empty:
+                continue
+            if inter.height <= RULE_MAX_H and inter.width >= RULE_MIN_W * (fr - fl):
+                rules.append((inter.y0, inter.y1))
+                continue
+            if inter.height > 2 and inter.width > 2:
                 objs.append((inter.y0, inter.y1))
                 vec_union |= inter
         imgarea = min(1.0, img_cover / abs(pr))
@@ -132,7 +198,7 @@ def analyze(pdf_path, frame_mm):
         pages.append({"page": pno + 1, "lines": len(lines),
                       "imgarea": round(imgarea, 3), "vecarea": round(vecarea, 3),
                       "reach": round(reach, 3),
-                      "_lines": lines, "_objs": objs,
+                      "_lines": lines, "_objs": objs, "_rules": rules,
                       "frame": (fl, ft, fr, fb)})
 
     # 행송(pitch)은 "본문 급수 행"만으로 잰다 — SVG 도해 라벨·2단 블록·캡션의 촘촘한
@@ -142,6 +208,9 @@ def analyze(pdf_path, frame_mm):
         for l in p["_lines"]:
             size_w[round(l["size"] * 2) / 2] += len(l["text"])
     body_size = size_w.most_common(1)[0][0] if size_w else 10.0
+    for p in pages:
+        # 괘선 블록 복원은 본문 급수가 확정된 뒤에만 가능하다
+        p["_blocks"] = _rule_blocks(p.pop("_rules"), p["_lines"], body_size)
     for p in pages:
         body_lines = [l for l in p["_lines"] if abs(l["size"] - body_size) <= max(1.0, 0.1 * body_size)]
         diffs = [b["y0"] - a["y0"] for a, b in zip(body_lines, body_lines[1:])

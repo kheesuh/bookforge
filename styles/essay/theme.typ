@@ -118,7 +118,8 @@
 }
 
 // 표(에세이엔 드묾): 번호 라벨 없이 캡션·출처만 조용히
-#let bf-tbl(caption: none, source: none, body) = block(breakable: false, above: 1.3em, below: 1.3em, width: 100%, {
+// 표 분할 허용 — 통짜 표의 통째 이월(구멍)·판면 초과(오버플로) 방지
+#let bf-tbl(caption: none, source: none, body) = block(breakable: true, above: 1.3em, below: 1.3em, width: 100%, {
   if caption != none {
     text(font: TT.sans-font, size: 8.5pt, fill: TT.muted, caption)
     v(2mm)

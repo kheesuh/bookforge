@@ -263,13 +263,17 @@ def render_table(tokens, ctx, cap=None) -> str:
         return ""
     ncol = max(1, max(len(r) for r in rows))
     padded = [list(r) + [""] * (ncol - len(r)) for r in rows]
-    cells = []
-    for r in padded:
-        cells.extend(f"[{c}]" for c in r)
     colspec = ", ".join(column_weights(padded, ncol))
     if ncol == 1:
         colspec += ","  # 1원소 배열은 후행 쉼표가 있어야 배열로 파싱된다
-    tbl = f"table(columns: ({colspec}), " + ", ".join(cells) + ")"
+    # 첫 행은 table.header로 감싼다 — 표가 면을 넘어 분할될 때 typst가 머리 행을
+    # 각 조각 상단에 자동 반복한다(머리 없는 뒷조각 = 판독 불가). 머리 행 셀의
+    # y는 반복본에서도 0이므로 테마의 y==0 계열 규칙(굵기·색·계선)이 그대로 산다.
+    head = ", ".join(f"[{c}]" for c in padded[0])
+    parts = [f"table.header({head})"]
+    for r in padded[1:]:
+        parts.extend(f"[{c}]" for c in r)
+    tbl = f"table(columns: ({colspec}), " + ", ".join(parts) + ")"
     if cap:
         title, source = cap
         args = [f"caption: [{esc(title)}]"]

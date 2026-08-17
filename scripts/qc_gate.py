@@ -296,6 +296,97 @@ G8_HEAD_BONUS = 0.07
 G8_GAP_CAP = 0.45
 
 
+# ---- G7 float 밀림 면제: 다음 면 첫 결속 단위의 소요 높이 ----
+# pagination.md §3 명문값. 통짜 블록(콜아웃·표·도판)은 블록 높이 자체가 소요이고,
+# 표제는 "뒤 본문과 결속"되므로 결속 행수를 더해야 한다.
+G7_H2_BIND = 6   # §3 개면: 앞 면 잔여가 `절 제목 + 본문 6줄`을 못 담으면 새 면
+G7_H3_BIND = 2   # §3 결속: 제목은 뒤 본문 2행과 결속
+# §3 고아/과부 하한 2행 → n행 문단은 (k, n−k) 둘 다 2 이상이어야 쪼갤 수 있다.
+# 즉 **3행 이하 문단은 원자**라 통째로 이월된다 — 제목 뒤 문단이 3행이면 결속 비용도 3행이다.
+G7_ATOMIC_MAX = 3
+G7_LIST_RE = re.compile(r"^\s*(?:[•·▪◦‣∙▶▸■□○※]|[-–—]\s|\(?\d{1,2}[.)]\s|[①-⓿㉠-㉻])")
+
+
+def _g7_unit_lines(ls, i, pitch, size):
+    """ls[i]부터 같은 급수로 이어지는 줄 묶음의 (끝 y, 줄 수)."""
+    end, n = ls[i]["y1"], 1
+    for l in ls[i + 1:]:
+        if abs(l["size"] - size) > 0.25 or l["y0"] - end > 1.3 * pitch:
+            break
+        end, n = max(end, l["y1"]), n + 1
+    return end, n
+
+
+def g7_head_leads(pages, body_size):
+    """표제·리스트 진입 여백(pt)의 책 전권 실측 중앙값 — H2/H3/list 따로.
+
+    테마가 표제 위에 주는 `v()`는 스타일마다 다르므로 상수로 박지 않고 잰다.
+    앞 행 바닥 ~ 표제 윗변 간격이며, 자연 행간이 포함된 값이다.
+    """
+    leads = {"h2": [], "h3": [], "list": []}
+    for p in pages:
+        ls = sorted(p["_lines"], key=lambda l: l["y0"])
+        for a, b in zip(ls, ls[1:]):
+            gap = b["y0"] - a["y1"]
+            if not 0 < gap < 60:
+                continue
+            if b["size"] > body_size + 0.25:
+                if abs(a["size"] - b["size"]) <= 0.25:
+                    continue                  # 표제의 둘째 줄
+                leads["h2" if b["size"] >= G8_HEAD_RATIO * body_size else "h3"].append(gap)
+            elif G7_LIST_RE.match(b["text"]) and not G7_LIST_RE.match(a["text"]):
+                leads["list"].append(gap)
+    return {k: (median(v) if v else 0.0) for k, v in leads.items()}
+
+
+def g7_first_unit_height(nxt, pitch, body_size, leads=None):
+    """다음 면 맨 위 결속 단위가 **요구하는 지면**(pt). 해당 없으면 None.
+
+    반환값은 여백·결속분까지 포함한 소요치라 호출부는 잔여와 그대로 비교한다.
+
+    본문 문단은 대상이 아니다 — 모든 면이 본문으로 시작하므로 여기에 하한을 주면
+    면제가 무차별로 열린다(고아/과부 2행은 G9가 따로 본다).
+    """
+    fl, ft, fr, fb = nxt["frame"]
+    near = ft + 2 * pitch
+    units = sorted(set(tuple(x) for x in list(nxt.get("_blocks", [])) + list(nxt["_objs"])))
+    head = [u for u in units if u[0] <= near]
+    if head:
+        top0 = min(a for a, _ in head)
+        cur1 = max(b for _, b in head)
+        for a, b in units:            # 맞닿은 단위는 하나로(표 + 바로 붙은 캡션 등)
+            if a > cur1 + pitch:
+                break
+            cur1 = max(cur1, b)
+        # 블록은 CSS/Typst 마진을 데리고 다닌다 — 3행송 슬랙(기존 계약 유지)
+        return (cur1 - top0) + 3 * pitch
+    ls = sorted(nxt["_lines"], key=lambda l: l["y0"])
+    if not ls or ls[0]["y0"] > near:
+        return None
+    lead = leads or {}
+    sz = ls[0]["size"]
+    if sz > body_size + 0.25:
+        # 표제 — 여러 줄로 접히면 그 전체가 단위, 뒤 본문과 결속(§3)
+        end, _ = _g7_unit_lines(ls, 0, pitch, sz)
+        h = end - ls[0]["y0"]
+        if sz >= G8_HEAD_RATIO * body_size:
+            return h + G7_H2_BIND * pitch + (lead.get("h2") or 0.0)
+        # H3: 뒤 문단이 3행 이하면 쪼갤 수 없어 통째로 따라온다(§3 고아/과부 2행)
+        nxt_i = next((k for k, l in enumerate(ls) if l["y0"] >= end), None)
+        bind = G7_H3_BIND
+        if nxt_i is not None:
+            _, plines = _g7_unit_lines(ls, nxt_i, pitch, ls[nxt_i]["size"])
+            # 2~3행 문단은 원자라 통째로 따라온다. 그 밖에는 §3 결속 하한 2행.
+            if G7_H3_BIND <= plines <= G7_ATOMIC_MAX:
+                bind = plines
+        return h + bind * pitch + (lead.get("h3") or 0.0)
+    if G7_LIST_RE.match(ls[0]["text"]):
+        # 리스트 항목은 원자다 — 항목 전체가 통째로 이월된다(§3 고아/과부 2행)
+        end, _ = _g7_unit_lines(ls, 0, pitch, sz)
+        return (end - ls[0]["y0"]) + (lead.get("list") or 0.0)
+    return None
+
+
 def g8_gap_threshold(style, lines, body_size):
     """(임계, 표제 행 수) — 표제 행 수에 비례해 허용 공기를 연다."""
     heads = sum(1 for l in lines if l["size"] >= G8_HEAD_RATIO * body_size)
@@ -535,6 +626,12 @@ def main():
     m = analyze(pdf, frame_mm)
     pages = m["pages"]
     N = m["n_grid"] or 1
+    # 본문 크기 = 글자 수 가중 최빈값(행 수 기준이면 리스트·표 9pt가 본문 10.5pt를 이길 수 있다)
+    _sizes = Counter()
+    for _p in pages:
+        for _l in _p["_lines"]:
+            _sizes[round(_l["size"] * 2) / 2] += len(_l["text"])
+    body_size = _sizes.most_common(1)[0][0] if _sizes else 10.0
 
     ch_starts = sorted({p for (_, p) in lvl1 if 1 <= p <= n})
     first_ch = ch_starts[0] if ch_starts else 1
@@ -558,22 +655,17 @@ def main():
     # 이 면의 미달은 결속 규칙의 정당한 대가다 — 중간면 판정에서 제외.
     float_pushed = set()
     pitch_ref = m["book_pitch"] or 12
+    head_leads = g7_head_leads(pages, body_size)
     for i, p in enumerate(pages[:-1]):
         nxt = pages[i + 1]
         fl, ft, fr, fb = nxt["frame"]
-        # 텍스트는 나눠 흐를 수 있으므로 면제 사유가 못 된다 — 객체(표 괘선·그림·박스)만 본다.
-        segs = sorted(nxt["_objs"])
-        if not segs or segs[0][0] > ft + 2 * pitch_ref:
-            continue  # 다음 면이 객체로 시작하지 않으면 밀림이 아니다
-        top0, cur1 = segs[0]
-        for a, b in segs[1:]:
-            if a - cur1 > pitch_ref * 3:  # 표는 모든 행에 괘선이 있지 않다 — 행 건너뜀 허용
-                break
-            cur1 = max(cur1, b)
-        first_block_h = cur1 - top0
+        # 통짜 블록(콜아웃·표·도판)과 표제 결속 단위만 면제 사유다 — 본문 문단은
+        # 나눠 흐르므로 대상이 아니다.
+        first_block_h = g7_first_unit_height(nxt, pitch_ref, body_size, head_leads)
+        if first_block_h is None:
+            continue  # 다음 면이 결속 단위로 시작하지 않으면 밀림이 아니다
         remaining = (1 - p["reach"]) * (p["frame"][3] - p["frame"][1])
-        # 블록은 CSS/Typst 마진을 데리고 다닌다 — 3행송 슬랙 인정
-        if first_block_h + pitch_ref * 3 > remaining:
+        if first_block_h > remaining:
             float_pushed.add(p["page"])
     body_last = max((p["page"] for p in pages
                      if p["lines"] > 0 and p["page"] not in colophon_pages), default=n)
@@ -591,55 +683,69 @@ def main():
     # ---- G11 pageroles.json ----
     roles_p = book_dir / "pageroles.json"
     roles = []
+    bad_pages, roles_void = set(), False
     g11 = {"declared": 0, "problems": [], "ok": True}
     if roles_p.exists():
         roles = json.loads(roles_p.read_text(encoding="utf-8")).get("roles", [])
         g11["declared"] = len(roles)
         budget = max(3, int(0.08 * n))
+        # 무효 선언 추적 — G7 면제는 **G11을 통과한 선언**만 받는다. 문자열 파싱이
+        # 아니라 판정 지점에서 직접 모은다(메시지 포맷 변경에 안 깨지게).
+        bad_pages, roles_void = set(), False
         if len(roles) > budget:
             g11["problems"].append(f"선언 면 {len(roles)} > 예산 {budget}")
+            roles_void = True   # 예산 초과는 선언 집합 전체가 부정 — 개별 구제 없음
         breaths = 0
         for r in roles:
             pg, code = r.get("page"), r.get("code")
             why, anchor = (r.get("why") or "").strip(), r.get("anchor")
             pm = next((p for p in pages if p["page"] == pg), None)
             if code not in ROLE_CODES:
-                g11["problems"].append(f"p{pg}: 코드 '{code}' 화이트리스트 밖"); continue
+                g11["problems"].append(f"p{pg}: 코드 '{code}' 화이트리스트 밖"); bad_pages.add(pg); continue
             if not why:
-                g11["problems"].append(f"p{pg}: why 비어 있음")
+                g11["problems"].append(f"p{pg}: why 비어 있음"); bad_pages.add(pg)
             if pm is None or not (1 <= pg <= n):
-                g11["problems"].append(f"p{pg}: 존재하지 않는 면"); continue
+                g11["problems"].append(f"p{pg}: 존재하지 않는 면"); bad_pages.add(pg); continue
             # 기계 선행조건 — 불충족 시 코드 자체가 FAIL (도장 방지)
             if code == "FULL_BLEED_PLATE" and pm["imgarea"] < 0.60:
-                g11["problems"].append(f"p{pg}: FULL_BLEED_PLATE인데 imgarea {pm['imgarea']} < 0.60")
+                g11["problems"].append(f"p{pg}: FULL_BLEED_PLATE인데 imgarea {pm['imgarea']} < 0.60"); bad_pages.add(pg)
             if code == "PART_DIVIDER" and pm["lines"] > 3:
-                g11["problems"].append(f"p{pg}: PART_DIVIDER인데 텍스트 {pm['lines']}행 > 3")
+                g11["problems"].append(f"p{pg}: PART_DIVIDER인데 텍스트 {pm['lines']}행 > 3"); bad_pages.add(pg)
             if code == "EXEC_SUMMARY":
                 if style != "business" or not (0.35 <= pm["ink"] <= 0.70):
-                    g11["problems"].append(f"p{pg}: EXEC_SUMMARY 선행조건 위반 (style={style}, ink={pm['ink']})")
+                    g11["problems"].append(f"p{pg}: EXEC_SUMMARY 선행조건 위반 (style={style}, ink={pm['ink']})"); bad_pages.add(pg)
             if code == "ESSAY_BREATH":
                 breaths += 1
                 if style != "essay" or pg not in tails or pm["lines"] < 6:
                     g11["problems"].append(f"p{pg}: ESSAY_BREATH 선행조건 위반 (꼬리 면·6행 이상·essay 한정)")
+                    bad_pages.add(pg)
             if code == "MAGAZINE_WHITESPACE" and style != "magazine":
-                g11["problems"].append(f"p{pg}: MAGAZINE_WHITESPACE는 magazine 한정")
+                g11["problems"].append(f"p{pg}: MAGAZINE_WHITESPACE는 magazine 한정"); bad_pages.add(pg)
             if code == "TOC_TAIL" and pg >= first_ch:
-                g11["problems"].append(f"p{pg}: TOC_TAIL은 본문 시작 전 한정")
+                g11["problems"].append(f"p{pg}: TOC_TAIL은 본문 시작 전 한정"); bad_pages.add(pg)
             if code == "CH_CLOSE_APPROVED" and pg not in tails:
                 g11["problems"].append(f"p{pg}: CH_CLOSE_APPROVED는 장 끝 면 한정 "
                                        "(레버 소진 후 최종 에스컬레이션)")
+                bad_pages.add(pg)
             if anchor:
                 if norm(anchor) not in norm(page_texts[pg - 1]):
-                    g11["problems"].append(f"p{pg}: anchor 불일치(stale — 리빌드로 면 밀림 의심)")
+                    g11["problems"].append(f"p{pg}: anchor 불일치(stale — 리빌드로 면 밀림 의심)"); bad_pages.add(pg)
             elif code not in ("FULL_BLEED_PLATE", "PART_DIVIDER"):
-                g11["problems"].append(f"p{pg}: anchor 필수(텍스트 면)")
+                g11["problems"].append(f"p{pg}: anchor 필수(텍스트 면)"); bad_pages.add(pg)
         if breaths > max(1, len(ch_starts)):
             g11["problems"].append(f"ESSAY_BREATH {breaths}회 > 장당 1회 한도")
+            roles_void = True
     g11["ok"] = not g11["problems"]
     report["gates"]["G11"] = g11
     if not g11["ok"]:
         fails.append("G11: " + "; ".join(g11["problems"][:3]))
-    role_by_page = {r.get("page"): r.get("code") for r in roles}
+    # G11을 통과한 선언만 G7 면제로 쓴다. 이 필터가 없으면 아무 코드나 찍어서
+    # G7-MID/TAIL soft 실패를 조용히 지울 수 있다 — 총 판정은 G11 실패로 FAIL이
+    # 남지만 **보고되는 G7 수치가 위조된다**(실측: 66 → 39).
+    role_by_page = ({} if roles_void
+                    else {r.get("page"): r.get("code") for r in roles
+                          if r.get("page") not in bad_pages})
+    g11["honored"] = sorted(role_by_page)
 
     # ---- G7-FRAME 판면 드리프트 ----
     ft_pt = frame_mm[0] * MM2PT
@@ -724,13 +830,6 @@ def main():
         report["gates"]["G7-DOC"] = {"median": med, "p10": p10, "ok": ok}
         if not ok:
             fails.append(f"G7-DOC: 꼬리 reach 중앙값 {med}/p10 {p10} < 0.80/0.55 — 원고 분량 설계 반환")
-
-    # 본문 크기 = 글자 수 가중 최빈값(행 수 기준이면 리스트·표 9pt가 본문 10.5pt를 이길 수 있다)
-    sizes = Counter()
-    for p in pages:
-        for l in p["_lines"]:
-            sizes[round(l["size"] * 2) / 2] += len(l["text"])
-    body_size = sizes.most_common(1)[0][0] if sizes else 10.0
 
     # ---- G8-STRETCH 공기 채움 ----
     g8 = {"stretched": [], "ok": True}

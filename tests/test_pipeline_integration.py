@@ -148,6 +148,58 @@ try:
     r, rep = run_gate(g10)
     check("4a G10이 G16보다 먼저 차단", rep["gates"]["G10"]["ok"] is False
           and "G16" not in rep["gates"], str(list(rep["gates"])))
+
+    # ---- 5) 사유 코드 무결성: 무효 선언이 G7 실패를 지우면 안 된다 (2026-08-17) ----
+    # 실측 재현: role_by_page를 G11 검증과 무관하게 만들면 아무 코드나 찍어서 G7-MID/TAIL
+    # soft 실패가 조용히 사라진다(보고 66 → 39로 위조). 총 판정은 G11 실패로 FAIL이지만
+    # 보고 수치를 신뢰할 수 없게 된다.
+    _FX = Path("/tmp/bf-typo-fix/academic")
+    if (_FX / "draft/book.pdf").exists():
+        import shutil as _sh
+        _t = Path(tempfile.mkdtemp(prefix="bf-roles-"))
+        _bd = _t / "book"
+        _sh.copytree(_FX, _bd, ignore=_sh.ignore_patterns("qc", "final", "typeset"))
+        (_bd / "pageroles.json").unlink(missing_ok=True)
+
+        def _run(root):
+            subprocess.run([sys.executable, str(GATE), str(root)],
+                           capture_output=True, text=True, cwd=str(REPO))
+            return json.loads((root / "gate-report.json").read_text(encoding="utf-8"))
+
+        _base = _run(_bd)
+        _g7 = lambda rep: sorted(x for x in rep.get("fails", []) if x.startswith("G7-"))
+
+        # 중간면 전체에 아무 코드나 찍는다 — 전부 선행조건 위반이라 G11이 반려해야 한다
+        _mid = [q["page"] for q in _base["metrics"]["pages"]
+                if q["page"] not in _base["metrics"]["structural_exempt"]
+                and q["page"] not in _base["metrics"]["tails"]][:6]
+        (_bd / "pageroles.json").write_text(json.dumps({"roles": [
+            {"page": pg, "code": "CH_CLOSE_APPROVED", "why": "무효 선언 실험",
+             "anchor": None} for pg in _mid]}, ensure_ascii=False), encoding="utf-8")
+        _bad = _run(_bd)
+
+        check("5a 무효 선언 → G11 FAIL", _bad["gates"]["G11"]["ok"] is False,
+              str(_bad["gates"]["G11"]["problems"][:2]))
+        check("5b 무효 선언은 honored에 없다", _bad["gates"]["G11"].get("honored") == [],
+              str(_bad["gates"]["G11"].get("honored")))
+        check("5c 무효 선언이 G7 실패를 지우지 못한다", _g7(_bad) == _g7(_base),
+              f"base={len(_g7(_base))}건 bad={len(_g7(_bad))}건")
+
+        # 예산 초과는 선언 집합 전체를 무효화한다
+        (_bd / "pageroles.json").write_text(json.dumps({"roles": [
+            {"page": pg, "code": "PART_DIVIDER", "why": "예산 초과 실험", "anchor": None}
+            for pg in range(2, 2 + max(4, int(0.08 * len(_base["metrics"]["pages"])) + 2))]},
+            ensure_ascii=False), encoding="utf-8")
+        _over = _run(_bd)
+        check("5d 예산 초과 시 선언 전체 무효", _over["gates"]["G11"].get("honored") == [],
+              str(_over["gates"]["G11"].get("honored")))
+        check("5e 예산 초과에도 G7 수치 불변", _g7(_over) == _g7(_base),
+              f"base={len(_g7(_base))}건 over={len(_g7(_over))}건")
+        _sh.rmtree(_t, ignore_errors=True)
+    else:
+        print("  [SKIP] 5) 사유 코드 무결성 — 픽스처 부재")
+
+
 finally:
     shutil.rmtree(tmp, ignore_errors=True)
 

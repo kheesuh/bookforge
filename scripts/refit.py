@@ -25,16 +25,18 @@ SKILL = Path(__file__).resolve().parent.parent
 # 자간 하드캡(pagination.md §5 — 폰트 사이드베어링 산출값, 테마 소비분 반영)
 CAP_NEG = {"practical": -0.015, "academic": -0.015, "essay": -0.015, "business": -0.015,
            "insight": -0.015, "magazine": -0.015}   # Δ 기준(테마 기본 대비 추가분)
-CAP_POS = 0.010
+# 정본 §5 L2 기본 허용치는 ±15/1000em이고 하드캡(사이드베어링 산출)은 **음의 방향에만**
+# 구속된다 — 양의 방향을 0.010으로 좁혀 두면 정본이 허용한 대역이 미탐색으로 남는다.
+CAP_POS = 0.015
 # HTML 테마가 이미 소비한 letter-spacing (inline이 대체하므로 절대값 = base + Δ)
 HTML_BASE = {"insight": -0.02, "magazine": 0.0}
 NEG_GRID = [-0.0025, -0.005, -0.0075, -0.010, -0.0125, -0.015]
-POS_GRID = [0.0025, 0.005, 0.0075, 0.010]
+POS_GRID = [0.0025, 0.005, 0.0075, 0.010, 0.0125, 0.015]
 
 TAIL_HARD = {"essay": 0.35, "magazine": 0.35}
 TAIL_WARN = {"practical": 0.70, "insight": 0.70, "academic": 0.70,
              "business": 0.65, "essay": 0.55, "magazine": 0.50}
-MID_MIN = {"essay": 0.88}
+MID_MIN = {"essay": 0.88, "insight": 0.85}   # qc_gate.MID_ROLE_MIN과 동일해야 한다
 
 
 def build(book_dir):
@@ -63,24 +65,25 @@ def chapter_spans(pdf_path, n_pages):
 
 
 def judge_chapter(pages_by_no, span, style, n_grid, ch_starts):
-    """returns (ok, tail_reach, tail_lines, mid_min_reach)"""
+    """returns (tail_ok, mid_ok, tail_reach, tail_lines, mid_min_reach)
+
+    **두 축을 분리해 돌려준다.** 예전엔 하나의 ok로 AND 묶어서, 중간면이 하나라도
+    미달인 장에서는 꼬리를 완벽히 고치는 Δ가 있어도 절대 채택되지 않았다. 중간면
+    미달은 대개 §3 결속이 만든 이월 구멍이라 자간으로 못 고치는데(그건 G7 면제의
+    몫이다), 그 때문에 고칠 수 있는 꼬리까지 함께 버려졌다.
+    """
     s, e = span
     tail_hard = TAIL_HARD.get(style, 0.45)
     tail_warn = TAIL_WARN.get(style, 0.70)
     mid_min = MID_MIN.get(style, 0.90)
     tail = pages_by_no.get(e)
     mids = [pages_by_no[p] for p in range(s + 1, e) if p in pages_by_no]
-    ok = True
-    if tail:
-        if tail["lines"] < 6 or tail["reach"] < max(tail_hard, tail_warn):
-            ok = False
-    for p in mids:
-        if p["imgarea"] >= 0.60:
-            continue
-        if p["reach"] < mid_min:
-            ok = False
-    return ok, (tail["reach"] if tail else None), (tail["lines"] if tail else 0), \
-        (min((p["reach"] for p in mids), default=1.0))
+    tail_ok = True
+    if tail and (tail["lines"] < 6 or tail["reach"] < max(tail_hard, tail_warn)):
+        tail_ok = False
+    mid_ok = all(p["reach"] >= mid_min for p in mids if p["imgarea"] < 0.60)
+    return tail_ok, mid_ok, (tail["reach"] if tail else None), \
+        (tail["lines"] if tail else 0), (min((p["reach"] for p in mids), default=1.0))
 
 
 def main():
@@ -115,20 +118,23 @@ def main():
         print(f"WARN: 북마크 장 수 {len(spans)} != outline {len(chapters)} — 대응 순서 가정")
 
     escalate = []
+    partial_ch = []
     for ci, ch in enumerate(chapters):
         if ci >= len(spans):
             break
         span = spans[ci]
-        ok, treach, tlines, midmin = judge_chapter(by_no, span, style, m["n_grid"], ch_starts)
-        if ok:
+        tail_ok, mid_ok, treach, tlines, midmin = judge_chapter(
+            by_no, span, style, m["n_grid"], ch_starts)
+        if tail_ok and mid_ok:
             continue
         ch_lines = sum(by_no[p]["lines"] for p in range(span[0], span[1] + 1) if p in by_no)
         budget_ok = tlines <= 0.022 * ch_lines * 1.5   # 당겨오기 물리 예산(여유 1.5배)
         grid = (NEG_GRID if budget_ok else []) + POS_GRID
         grid = [d for d in grid if CAP_NEG.get(style, -0.015) <= d <= CAP_POS]
         print(f"[{ch}] tail reach={treach} lines={tlines} mid_min={midmin} "
+              f"(꼬리 {'OK' if tail_ok else 'FAIL'} / 중간면 {'OK' if mid_ok else 'FAIL'}) "
               f"budget={'pull-up 가능' if budget_ok else 'pull-up 불가(밀어내기만)'} — 후보 {len(grid)}개")
-        solutions = []
+        solutions, partials = [], []
         for delta in grid:
             params[ch] = key_for(delta)
             rp.write_text(json.dumps(params, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -137,14 +143,25 @@ def main():
             m2, by2, spans2 = measure()
             if ci >= len(spans2):
                 continue
-            ok2, tr2, tl2, mm2 = judge_chapter(by2, spans2[ci], style, m2["n_grid"], None)
-            print(f"  Δ={delta:+.4f}em → tail reach={tr2} lines={tl2} mid_min={mm2} {'PASS' if ok2 else ''}")
-            if ok2:
+            t_ok2, m_ok2, tr2, tl2, mm2 = judge_chapter(by2, spans2[ci], style, m2["n_grid"], None)
+            mark = "PASS" if (t_ok2 and m_ok2) else ("꼬리해결" if t_ok2 else "")
+            print(f"  Δ={delta:+.4f}em → tail reach={tr2} lines={tl2} mid_min={mm2} {mark}")
+            if t_ok2 and m_ok2:
                 solutions.append((abs(delta), delta))
+            elif t_ok2 and mm2 >= midmin:
+                # 부분해: 꼬리를 해결하고 중간면은 **악화시키지 않는다**. 중간면 미달은
+                # 자간으로 못 고치는 구조 파생이라, 이걸 버리면 고칠 수 있는 꼬리도 함께 버려진다.
+                partials.append((abs(delta), delta, mm2))
         if solutions:
             best = min(solutions)[1]
             params[ch] = key_for(best)
-            print(f"[{ch}] 채택 Δ={best:+.4f}em (최소 개입)")
+            print(f"[{ch}] 채택 Δ={best:+.4f}em (최소 개입, 두 축 통과)")
+        elif partials:
+            best = min(partials)
+            params[ch] = key_for(best[1])
+            partial_ch.append(ch)
+            print(f"[{ch}] 부분 채택 Δ={best[1]:+.4f}em — 꼬리 해결, 중간면 {best[2]} "
+                  f"(기준 {MID_MIN.get(style, 0.90)} 미달이나 무회귀). 중간면은 G7 면제/구조 소관")
         else:
             params.pop(ch, None)
             escalate.append(ch)
@@ -152,6 +169,8 @@ def main():
         rp.write_text(json.dumps(params, ensure_ascii=False, indent=2), encoding="utf-8")
 
     build(book_dir)  # 최종 파라미터로 재빌드
+    if partial_ch:
+        print("PARTIAL(꼬리만 해결, 중간면 잔존):", ", ".join(partial_ch))
     if escalate:
         print("ESCALATE:", ", ".join(escalate))
         sys.exit(2)
