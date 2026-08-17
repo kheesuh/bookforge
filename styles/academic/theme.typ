@@ -43,9 +43,11 @@
       v(7mm)
       align(center, text(font: ("Noto Serif KR",), size: 13pt, fill: ink, keep-words(meta.subtitle)))
     }
-    v(16mm)
-    align(center, text(font: TT.display-font, weight: "medium", size: 11.5pt, fill: ink,
-      meta.at("author", default: "bookforge")))
+    let author = meta.at("author", default: "")
+    if author != "" {
+      v(16mm)
+      align(center, text(font: TT.display-font, weight: "medium", size: 11.5pt, fill: ink, author))
+    }
     v(1fr)
     align(center, text(font: TT.display-font, weight: "medium", size: 9.5pt, fill: ink,
       meta.at("publisher", default: "bookforge")))
@@ -252,7 +254,12 @@
     // 부제는 별행 — 엠대시 연결 표기를 쓰지 않는다
     if meta.at("subtitle", default: none) != none { linebreak(); meta.subtitle }
     linebreak()
-    [#meta.at("date", default: "") 발행 · 지은이 #meta.at("author", default: "bookforge")]
+    let author = meta.at("author", default: "")
+    if author == "" {
+      [#meta.at("date", default: "") 발행]
+    } else {
+      [#meta.at("date", default: "") 발행 · 지은이 #author]
+    }
     linebreak()
     [조판 bookforge · 본문 Noto Serif KR·Libertinus Serif · 표제 Pretendard]
   })
@@ -389,8 +396,11 @@
       v(5mm)
       align(center, text(font: ("Noto Serif KR",), size: 11pt, meta.subtitle))
     }
-    v(10mm)
-    align(center, text(font: t.display-font, weight: "medium", size: 10pt, meta.at("author", default: "")))
+    let author = meta.at("author", default: "")
+    if author != "" {
+      v(10mm)
+      align(center, text(font: t.display-font, weight: "medium", size: 10pt, author))
+    }
   })
   if toc {
     // 앞붙이 쪽번호(i, ii, iii…) · 러닝헤드 없음
