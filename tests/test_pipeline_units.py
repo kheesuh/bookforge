@@ -94,7 +94,8 @@ check("A2 혼합 4컬럼 — 좁은 2개는 auto", tk[0] == "auto" and tk[1] == 
 check("A2b 넓은 2개는 fr", tk[2].endswith("fr") and tk[3].endswith("fr"), f"tracks={tk} raw={rw}")
 check("A2c 넓은 컬럼끼리는 내용 비례 유지",
       int(tk[2][:-2]) >= int(tk[3][:-2]), f"tracks={tk} raw={rw}")
-check("A2d fr 상한 42", int(tk[2][:-2]) == 42, f"tracks={tk} raw={rw}")
+# 폭은 이제 절대 상한이 아니라 **내용 총량 비**로 정해진다(B-9 수리)
+check("A2d 내용이 많은 컬럼이 더 넓다", int(tk[2][:-2]) >= int(tk[3][:-2]), f"tracks={tk} raw={rw}")
 
 # A3 전부 좁음 → 전부 auto (표가 자연폭 — 용어표에 정당)
 NARROW = """# 테스트 장
@@ -143,7 +144,8 @@ ONE_W = """# 테스트 장
 """
 c_n, c_w = cols_of(md_to_typ(ONE_N)), cols_of(md_to_typ(ONE_W))
 check("A6 1컬럼 좁음 → (auto,)", c_n.strip() == "auto,", f"columns=({c_n})")
-check("A6b 1컬럼 넓음 → (42fr,)", c_w.strip() == "42fr,", f"columns=({c_w})")
+check("A6b 1컬럼 넓음 → 단일 fr + 후행 쉼표",
+      c_w.strip().endswith("fr,") and c_w.count(",") == 1, f"columns=({c_w})")
 
 # A7 빈 셀 표 — 죽지 않고 auto
 EMPTY = """# 테스트 장
@@ -864,6 +866,70 @@ check("H5a pagination.md가 코드 7종으로 갱신됐다", "코드 7종" in _p
 check("H5b 7종 전부가 문서에 실재", all(c in _pag for c in qc_gate.ROLE_CODES),
       str([c for c in qc_gate.ROLE_CODES if c not in _pag]))
 check("H5c 구현 ROLE_CODES가 7종", len(qc_gate.ROLE_CODES) == 7, str(len(qc_gate.ROLE_CODES)))
+
+
+
+# ============ I. 판정 C 수리 — 표 폭 비례 · 이중 마커 · 도비라 (2026-08-17)
+print("\n=== I. 판정 C 수리 ===")
+
+# I1 (B-9) 표 컬럼 폭이 **내용 총량**에 비례한다
+def _tbl(rows):
+    md = "# 장\n\n" + "\n".join("| " + " | ".join(r) + " |" for r in rows[:1]) \
+         + "\n| " + " | ".join("---" for _ in rows[0]) + " |\n" \
+         + "\n".join("| " + " | ".join(r) + " |" for r in rows[1:]) + "\n"
+    return tracks(md)
+
+_short, _long = "용어", "이 항목은 상당히 긴 설명 문장을 담고 있어서 여러 행으로 접힌다"
+# 용어 컬럼에 긴 항목이 **하나만** 있어도 예전엔 상한까지 부풀어 50:50이 됐다
+_rev = _tbl([["구분", "설명"],
+             ["Executive Leadership (CEO, COO, CRO, CDAO, CCO, CISO, CPO)", _long],
+             [_short, _long], [_short, _long], [_short, _long], [_short, _long]])
+_w = [int(x[:-2]) for x in _rev]
+check("I1a 긴 항목 하나가 컬럼 전체를 부풀리지 않는다", _w[1] > _w[0], f"{_rev}")
+check("I1b 내용 5배 차가 폭에 살아남는다(역전 없음)", _w[1] >= 2 * _w[0], f"{_rev}")
+
+# 내용이 비슷하면 폭도 비슷 — 무회귀
+_even = _tbl([["가", "나"], [_long, _long], [_long, _long]])
+_we = [int(x[:-2]) for x in _even]
+check("I1c 내용이 같으면 폭도 같다", _we[0] == _we[1], f"{_even}")
+# 내용 1:2면 폭도 그 방향(판정이 정상이라 한 34:66·38:62 대역)
+_ratio = _tbl([["가", "나"], [_long, _long + _long], [_long, _long + _long]])
+_wr = [int(x[:-2]) for x in _ratio]
+check("I1d 내용 1:2 → 폭도 1:2 방향", 1.2 <= _wr[1] / _wr[0] <= 2.2, f"{_ratio} 비={_wr[1]/_wr[0]:.2f}")
+check("I1e 좁은 컬럼은 여전히 auto", tracks("# 장\n\n| 가 | 나 |\n| --- | --- |\n| 짧다 | 짧다 |\n")
+      == ["auto", "auto"])
+
+# I2 (B-5) 원문자 보기는 불릿 없이 — 이중 마커 제거
+_quiz = md_to_typ("# 장\n\n- ① 첫 보기\n- ② 둘째 보기\n- ③ 셋째 보기\n")
+check("I2a 원문자 리스트는 마커를 비운다", "#set list(marker: []);" in _quiz, _quiz[-160:])
+check("I2b 리스트 문법 자체는 유지(되돌이 들여쓰기 보존)", "- ① 첫 보기" in _quiz)
+_plain = md_to_typ("# 장\n\n- 평범한 항목\n- 또 다른 항목\n")
+check("I2c 일반 리스트는 그대로", "marker: []" not in _plain, _plain[-90:])
+_mixed = md_to_typ("# 장\n\n- ① 원문자 항목\n- 평범한 항목\n")
+check("I2d 섞인 리스트는 건드리지 않는다", "marker: []" not in _mixed)
+_hangul = md_to_typ("# 장\n\n- ㉮ 가 보기\n- ㉯ 나 보기\n")
+check("I2e 한글 원문자도 인식(G16과 같은 범위)", "marker: []" in _hangul)
+_ord = md_to_typ("# 장\n\n1. ① 번호 리스트\n2. ② 둘째\n")
+check("I2f 번호 리스트는 대상 아님", "marker: []" not in _ord)
+
+# I3 도비라 면 밀도 게이트
+_fr = (50.0, 73.7, 350.0, 538.9)      # 하단 538.9pt
+_op = lambda last_y: {"page": 8, "frame": _fr, "_objs": [], "_blocks": [],
+                      "_lines": [{"y0": 100, "y1": 120, "size": 20.0, "text": "장 제목"},
+                                 {"y0": last_y - 11, "y1": last_y, "size": 9.5, "text": "리드"}]}
+_far = 538.9 - 70 * (72 / 25.4)       # 하단 공백 70mm
+_near = 538.9 - 20 * (72 / 25.4)      # 하단 공백 20mm
+check("I3a 별면 도비라(공백 70mm) → FAIL",
+      len(qc_gate.g17_opener_check([_op(_far)], [8], "academic")) == 1)
+check("I3b 본문이 흐르는 도비라(공백 20mm) → PASS",
+      qc_gate.g17_opener_check([_op(_near)], [8], "academic") == [])
+check("I3c 실측 근거 없는 스타일은 비대상(과잉 일반화 금지)",
+      qc_gate.g17_opener_check([_op(_far)], [8], "essay") == []
+      and qc_gate.g17_opener_check([_op(_far)], [8], "business") == [])
+_blk = dict(_op(_near)); _blk["_blocks"] = [(300.0, 530.0)]
+check("I3d 콜아웃·표도 하단 도달로 계산", qc_gate.g17_opener_check([_blk], [8], "academic") == [])
+check("I3e 도비라가 아닌 면은 비대상", qc_gate.g17_opener_check([_op(_far)], [], "academic") == [])
+check("I3f 정본에 G17이 기재됐다", "G17-OPENER" in _pag)
 
 
 print("\n" + "=" * 60)

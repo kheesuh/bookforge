@@ -172,6 +172,11 @@ def render_tokens(tokens, ctx) -> str:
         i += 1
     return "\n".join(out)
 
+# 보기 항목의 원문자는 그 자체가 마커다 — 불릿을 겹쳐 찍으면 `• ①` 이중 마커가 된다.
+# 범위는 G16(qc_gate·run_swarm)의 원문자 판정과 같다.
+CIRCLED_ITEM_RE = re.compile(r"^[①-⓿㉠-㉻]")
+
+
 def render_list(tokens, ctx) -> str:
     ordered = tokens[0].type == "ordered_list_open"
     marker = "+" if ordered else "-"
@@ -191,7 +196,13 @@ def render_list(tokens, ctx) -> str:
             i = j
         else:
             i += 1
-    return "\n".join(items) + "\n"
+    body = "\n".join(items) + "\n"
+    if not ordered and items and all(CIRCLED_ITEM_RE.match(x[2:].lstrip()) for x in items):
+        # 마커를 비우되 리스트 자체는 유지한다 — 되돌이 들여쓰기(본문 시작 아래 정렬)가
+        # 그대로 살아야 한다(판정 ⑥의 113/114 정렬 품질). 매달림 문단으로 바꾸면
+        # 정렬 기준이 원문자 뒤로 옮겨가 그 품질이 달라진다(실측 비교).
+        return "#[\n#set list(marker: []);\n" + body + "]\n"
+    return body
 
 # ---- 표 컬럼 폭: 좁은 컬럼 auto + 넓은 컬럼 비례 fr ----
 # 균등 (1fr,)*n은 4자 용어 컬럼과 40자 설명 컬럼에 같은 폭을 준다. 그렇다고 전부
@@ -199,8 +210,8 @@ def render_list(tokens, ctx) -> str:
 # 컬럼이 내용 폭 이하로 압착되고 한글이 한 자씩 세로로 꺾인다(단/일/통/합).
 # 그래서 자연폭이면 충분한 좁은 컬럼은 auto로 빼고, 넓은 컬럼들만 fr로 잔여 폭을
 # 나눈다. fr이 하나라도 있으면 표는 여전히 판면 폭을 채운다.
-TBL_AUTO_MAX = 14                  # 이 유효 폭 이하(CJK 7자 상당)면 auto
-TBL_COL_MIN, TBL_COL_MAX = 16, 42  # fr 컬럼 가중치 클램프 (하한은 auto 문턱과 겹치지 않게)
+TBL_AUTO_MAX = 14   # 최장 셀이 이 폭 이하(CJK 7자 상당)면 auto — 내용 자연폭이면 충분
+TBL_FR_MIN = 16     # 가장 좁은 fr 컬럼의 기준 가중치(비율만 의미가 있다)
 # inline()이 낸 typst 마크업 토큰 — 폭 계산 전에 걷어낸다
 TYPST_RAW_RE = re.compile(r'#raw\("((?:[^"\\]|\\.)*)"\)')
 TYPST_FN_OPEN_RE = re.compile(r'#(?:strong|emph|strike)\[|#link\("(?:[^"\\]|\\.)*"\)\[')
@@ -237,17 +248,27 @@ def visible_width(cell: str) -> int:
 def column_weights(padded_rows, ncol: int):
     """컬럼별 트랙 크기 문자열 목록 — 좁으면 'auto', 넓으면 'Nfr'.
 
-    기준은 그 컬럼 전 셀(헤더 포함) 유효 폭의 최대값. 전 컬럼이 좁아 모두 auto면
-    표가 자연폭이 되는데, 용어표에는 그쪽이 타이포그래피적으로 옳다.
+    fr 가중치는 **컬럼 내용 총량**에 비례한다. 예전엔 최장 셀 하나로 정했는데,
+    용어 컬럼에 긴 항목이 하나만 있어도 상한까지 부풀고 5~8배 내용의 설명 컬럼도
+    같은 상한에 눌려 **차이가 소거됐다**(실측: 내용 294 : 2691인데 폭 50:50).
+    총량은 컬럼이 몇 행으로 접힐지를 결정하는 양이라 폭의 올바른 기준이다.
+
+    다만 총량 비례만 쓰면 좁은 컬럼이 낱말도 못 담을 만큼 눌린다 — 등분 폭의 절반을
+    **모든 컬럼에 더해** 비를 완만하게 만든다. `max()`로 바닥을 치면 서로 다른 두
+    좁은 컬럼이 같은 값으로 뭉개져 새 역전이 생긴다(실측: 46 : 309가 둘 다 16fr).
+    가산은 순서를 보존하면서 극단만 눌러 준다 — 내용 1:2는 39:61, 1:9는 23:77.
     """
-    out = []
-    for ci in range(ncol):
-        w = max((visible_width(r[ci]) for r in padded_rows), default=0)
-        if w <= TBL_AUTO_MAX:
-            out.append("auto")
-        else:
-            out.append(f"{max(TBL_COL_MIN, min(TBL_COL_MAX, int(w)))}fr")
-    return out
+    maxw = [max((visible_width(r[ci]) for r in padded_rows), default=0)
+            for ci in range(ncol)]
+    fr_cols = [ci for ci in range(ncol) if maxw[ci] > TBL_AUTO_MAX]
+    if not fr_cols:
+        return ["auto"] * ncol
+    tot = {ci: max(1, sum(visible_width(r[ci]) for r in padded_rows)) for ci in fr_cols}
+    floor = (sum(tot.values()) / len(tot)) / 2       # 등분 폭의 절반
+    adj = {ci: t + floor for ci, t in tot.items()}   # 가산 — 순서 보존
+    base = min(adj.values())
+    return [f"{max(TBL_FR_MIN, round(TBL_FR_MIN * adj[ci] / base))}fr"
+            if ci in adj else "auto" for ci in range(ncol)]
 
 
 def render_table(tokens, ctx, cap=None) -> str:

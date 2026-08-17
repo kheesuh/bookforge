@@ -22,6 +22,8 @@ Gates (pagination.md §7):
                 색상(hue) 정합 / C 텍스트 배경 대비 WCAG 하한(대형 3:1, 그 외 4.5:1)
   G16 notation: (렌더 전) 한 문단 인라인 보기 나열(①②③·1)2)3))·엠대시 남용 —
                 표기 규범(references/copyediting.md), 엠대시 1~3은 WARN
+  G17 opener  : 장 도비라 면의 하단 공백 상한 — 별면 도비라(제목만 있는 면) 차단.
+                G7이 ch_starts를 면제하는 사각을 메운다 (스타일별 실측 근거만)
 Writes <book_dir>/gate-report.json. On PASS copies draft/book.pdf -> final/<slug>.pdf.
 Exit 0 = PASS, 1 = FAIL. (G6 visual judgement is the agent's job on the contact sheet.)
 """
@@ -277,6 +279,35 @@ def g16_notation_check(book_dir, outline):
         elif em:
             warns.append(f"{ch['file']}: 엠대시 {em}개 — 가능하면 줄여라")
     return problems, warns
+
+
+# ---- G17 도비라(장 오프너) 면 밀도 ----
+# G7은 `pg in ch_starts`를 통째로 면제해 도비라를 어느 풀에도 넣지 않는다. 그래서
+# 판면의 절반이 빈 별면 도비라가 7면 있어도 `G7-MID underfull: []`가 나왔다(판정 C-1).
+# 도비라 문법은 스타일마다 다르므로 실측 근거가 있는 스타일만 강제한다(G15 패턴).
+# academic 임계 60mm 근거 [실측 — AIGP 383면]: 별면 7면 67.7~83.1mm / 본문이 흐르는
+# 5면 8.5~53.1mm. 두 무리 사이가 53.1→67.7로 벌어져 있어 그 가운데를 취했다.
+G17_OPENER_CFG = {"academic": {"max_tail_mm": 60}}
+
+
+def g17_opener_check(pages, ch_starts, style):
+    """도비라 면에 본문이 실렸는지 — 하단 공백 상한으로 판정."""
+    cfg = G17_OPENER_CFG.get(style)
+    if not cfg:
+        return []
+    problems = []
+    for pg in ch_starts:
+        p = next((x for x in pages if x["page"] == pg), None)
+        if not p or not p["_lines"]:
+            continue
+        bottom = max([l["y1"] for l in p["_lines"]]
+                     + [b for _, b in p.get("_blocks", [])]
+                     + [b for _, b in p["_objs"]])
+        tail_mm = (p["frame"][3] - bottom) / MM2PT
+        if tail_mm > cfg["max_tail_mm"]:
+            problems.append(f"p{pg}: 도비라 하단 공백 {tail_mm:.1f}mm > {cfg['max_tail_mm']}mm "
+                            f"— 별면 도비라(STYLE.md: 같은 면에서 본문이 시작한다)")
+    return problems
 
 
 # ---- G8-STRETCH 임계 (표제 여백은 구조적 공기 — 스타일 정본이 규정한 값이다) ----
@@ -820,6 +851,13 @@ def main():
                     fails.append(f"G7-MID: p{pg} reach {p['reach']} < {mid_role_min}, 사유 코드 없음")
     report["gates"]["G7-TAIL"] = g7t
     report["gates"]["G7-MID"] = g7m
+
+    # ---- G17 도비라 면 밀도 (G7이 ch_starts를 통째로 면제하는 사각) ----
+    g17 = g17_opener_check(pages, ch_starts, style)
+    report["gates"]["G17"] = {"problems": g17, "ok": not g17}
+    if g17:
+        fails.append("G17-OPENER: " + "; ".join(g17[:3])
+                     + (f" 외 {len(g17)-3}건" if len(g17) > 3 else ""))
 
     # ---- G7-DOC 문서 통계 (실측 근거 있는 스타일만) ----
     if style in DOC_STATS_STYLES and tail_reaches:

@@ -54,6 +54,8 @@
 
 #let fig-counter = counter("bf-fig")
 #let tbl-counter = counter("bf-tbl")
+// 표 라벨 → 그 표가 시작한 면. 분할 표의 (계속) 판별용.
+#let tbl-start = state("bf-tbl-start", (:))
 
 // ---- 장 헤더: 도비라 별면 금지 — 같은 면에서 본문 시작 ------------------------
 #let bf-chapter(title, summary: none) = {
@@ -98,7 +100,12 @@
     else if kind == "quote" { none }
     else { "정리" }
   block(
-    width: 100%, breakable: false,
+    // **분할 가능(breakable)** — 콜아웃이 통짜였을 때 장 첫 블록(학습 목표)이
+    // 도비라 잔여 공간(9~84mm)보다 커서(67~130mm) 통째로 이월했고, 그 결과
+    // 12개 장 중 7개가 본문 0행짜리 별면 도비라가 됐다(판정 C-1, 실측).
+    // 계선+라벨 문법에서는 조각이 표 분할과 같은 꼴(상단 계선-내용-하단 계선)로
+    // 읽히므로 색면 박스 시절의 불가분성 전제가 더는 필요 없다.
+    width: 100%, breakable: true,
     // B4(주의/경고)는 상단 계선 1.2pt — book-anatomy §10
     stroke: (top: (if kind == "warn" { 1.2pt } else { 0.6pt }) + ink,
              bottom: 0.3pt + ink),
@@ -107,9 +114,11 @@
       set text(size: 9.5pt)
       set par(leading: 6.5pt, first-line-indent: 0em)
       if label != none {
-        text(font: TT.sans-font, weight: "semibold", size: 9pt, tracking: 0.05em,
-          fill: if kind == "warn" { rgb("#8C2B20") } else { ink }, label)
-        linebreak()
+        // sticky — 분할 시 라벨만 앞 면에 홀로 남는 것을 막는다
+        block(sticky: true, above: 0pt, below: 0pt,
+          text(font: TT.sans-font, weight: "semibold", size: 9pt, tracking: 0.05em,
+            fill: if kind == "warn" { rgb("#8C2B20") } else { ink }, label))
+        v(3pt, weak: true)
       }
       body
     })
@@ -150,24 +159,56 @@
 // 분할 시 각 조각은 booktabs 3선을 온전히 갖는다: 상단 1.0pt + 반복 머리 행 +
 // 머리 아래 0.4pt + 하단 1.0pt(래퍼 stroke가 조각마다 그린다 — longtable 관행).
 #let bf-tbl(caption: none, source: none, body) = block(breakable: true, above: 6mm, below: 6mm, width: 100%, {
+  // 캡션·자료·표는 모두 **좌단 기준 좌측 정렬** — 규정 "표 캡션은 표 폭 기준 좌측 정렬"
+  // (구판은 셋 다 판면 정중앙이었다: 판정 B-1·B-2). 표 자체도 좌측 정렬로 맞춰야
+  // 폭이 좁은 auto 표에서 캡션 좌단과 표 좌단이 어긋나지 않는다.
+  // 전역 par(first-line-indent: all)이 캡션·자료를 1자 밀어내므로 여기서 해제한다
+  // (해제 전 실측: 캡션 x=80.9pt / 자료 78.9pt vs 판면 좌단 70.9pt).
+  set par(first-line-indent: 0em)
   if caption != none {
     context {
       tbl-counter.step()
       let n = chapter-state.get().num
       let m = tbl-counter.get().first() + 1
-      align(center, {
-        text(font: TT.sans-font, size: 8.5pt, weight: "semibold", fill: accent,
-          "표 " + str(n) + "-" + str(m) + ".")
-        h(0.5em)
-        text(font: TT.sans-font, size: 8.5pt, fill: ink, caption)
-      })
+      let lab = "표 " + str(n) + "-" + str(m)
+      // 이 표가 시작한 면을 기록해 둔다 — 반복 머리 행에서 "이어짐" 판별에 쓴다.
+      // here()는 update 클로저 밖에서 미리 풀어야 한다(클로저는 context 밖에서 실행됨)
+      let start-pg = here().page()
+      tbl-start.update(d => { let e = d; e.insert(lab, start-pg); e })
+      // 라벨 Pretendard SemiBold 9pt + 1자 공백 + 제목 Noto Serif KR 9pt (규정)
+      text(font: TT.sans-font, size: 9pt, weight: "semibold", fill: accent, lab + ".")
+      h(1em)
+      text(font: ("Noto Serif KR",), size: 9pt, fill: ink, caption)
+      v(2mm)
+      // (계속) 표기 — 반복 머리 행 안의 context는 **조각마다 재평가된다**(실측 확인).
+      // 그래서 조각의 면 > 표 시작 면이면 이어짐으로 판별할 수 있다. 표 위쪽에
+      // 얹지 않고 머리 행 첫 칸에 붙이는 이유: 이어짐 조각은 판면 상단에서 시작해
+      // 표 위에 여백이 없다(그 자리는 러닝헤드 헤어라인 영역).
+      show table.cell.where(y: 0): it => if it.x != 0 { it } else {
+        context {
+          if here().page() > tbl-start.get().at(lab, default: 0) {
+            // place로 얹어 행 높이를 늘리지 않는다 — 셀 안에 인라인으로 넣으면
+            // 좁은 첫 칼럼에서 줄바꿈돼 머리 행만 2행이 되고 옆 칸 세로 정렬이 틀어진다.
+            // 이어짐 조각은 판면 상단에서 시작하므로 표 상단 룰 위 여백에 앉힐 수 있다.
+            place(top + left, dy: -4.2mm,
+              text(font: TT.sans-font, size: 7.5pt, weight: "regular", fill: muted,
+                lab + " (계속)"))
+          }
+          it
+        }
+      }
+      block(stroke: (bottom: 1pt + ink), inset: 0pt, body)  // booktabs bottomrule
+      if source != none {
+        v(2mm)
+        text(font: TT.sans-font, size: 8pt, fill: muted, [자료: #source])
+      }
     }
-    v(2mm)
-  }
-  align(center, block(stroke: (bottom: 1pt + ink), inset: 0pt, body))  // booktabs bottomrule
-  if source != none {
-    v(1.5mm)
-    align(center, text(font: TT.sans-font, size: 7.5pt, fill: muted, [자료: #source]))
+  } else {
+    block(stroke: (bottom: 1pt + ink), inset: 0pt, body)
+    if source != none {
+      v(2mm)
+      text(font: TT.sans-font, size: 8pt, fill: muted, [자료: #source])
+    }
   }
 })
 
@@ -248,17 +289,21 @@
           if secs.len() > 0 {
             align(right, context {
               let num = str(prev.len()) + "." + str(secs.len()) + " "
-              let nw = measure(text(fill: muted, num)).width
-              text(fill: muted, num)
-              text(fill: muted, fit-trunc(bf-plain(secs.last().body), rw - nw - 2pt))
+              // B-10: 헤드는 --ink (구판 우측 절 칼럼만 --muted였다)
+              let nw = measure(num).width
+              num
+              fit-trunc(bf-plain(secs.last().body), rw - nw - 2pt)
             })
           } else { [] })
         v(1.5mm)
         line(length: 100%, stroke: 0.4pt + rule-c)
       }
     },
+    // B-8: 쪽번호는 Libertinus Serif 9pt tabular (규정 §러닝 시스템). 구판은 Pretendard.
     footer: context align(center,
-      text(font: t.sans-font, size: 9pt, fill: ink, str(counter(page).get().first()))),
+      text(font: t.body-font, size: 9pt, fill: ink,
+        number-type: "lining", number-width: "tabular",
+        str(counter(page).get().first()))),
   )
   // 행송 17.5pt 고정: top/bottom-edge 고정 + leading 7.5pt
   set text(font: t.body-font, size: 10pt, fill: ink, lang: "ko", region: "KR",
@@ -297,8 +342,10 @@
       set par(leading: 6.5pt, first-line-indent: 0em)
       it.body
     })
-  set list(indent: 1em, spacing: 7.5pt)
-  set enum(indent: 1em, spacing: 7.5pt)
+  // B-4: 불릿은 `–`(en dash) — 중점 `·`는 klreq 구분 부호와 충돌(규정 §목록)
+  set list(marker: ([–], [·]), indent: 1em, spacing: 7.5pt)
+  // B-6: 번호 목록은 `1) 2) 3)` (규정 §목록)
+  set enum(numbering: "1)", indent: 1em, spacing: 7.5pt)
   show raw.where(block: true): it => block(
     width: 100%, fill: luma(248), inset: 8pt, above: 5mm, below: 5mm,
     text(font: code-font, size: 8.5pt, it))
