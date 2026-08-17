@@ -699,8 +699,11 @@ def main():
     for axis in ("A", "B", "C"):
         for p in g14[axis]["problems"]:
             fails.append(f"G14-{axis}: {p}")
+    # 판권면은 출판 브랜드와 독립적으로 식별한다. 브랜드 교체가 밀도·구조 면제
+    # 판정을 깨뜨리지 않도록, 조판 크레디트와 본문 서체 크레디트의 조합을 쓴다.
     colophon_pages = {i + 1 for i, t in enumerate(page_texts)
-                      if "bookforge" in t and "조판" in t and i + 1 >= (ch_starts[-1] if ch_starts else 1)}
+                      if "조판" in t and "본문" in t
+                      and i + 1 >= (ch_starts[-1] if ch_starts else 1)}
     fullbleed = {p["page"] for p in pages
                  if p["imgarea"] >= 0.60 or p.get("vecarea", 0) >= 0.60}
     # float 밀림 면제(구조 파생): 다음 면 첫 블록(통짜 표·그림)이 이 면 잔여 공간보다 크면

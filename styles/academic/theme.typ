@@ -50,7 +50,7 @@
     }
     v(1fr)
     align(center, text(font: TT.display-font, weight: "medium", size: 9.5pt, fill: ink,
-      meta.at("publisher", default: "bookforge")))
+      meta.at("publisher", default: "Ian Bookshelf")))
   })
 }
 
@@ -121,7 +121,7 @@
         // sticky — 분할 시 라벨만 앞 면에 홀로 남는 것을 막는다
         block(sticky: true, above: 0pt, below: 0pt,
           text(font: TT.sans-font, weight: "semibold", size: 10.5pt, tracking: 0em,
-            fill: if kind == "warn" { rgb("#8C2B20") } else { ink }, label))
+            fill: ink, label))
         v(6pt, weak: true)
       }
       body
@@ -273,14 +273,14 @@
       [#meta.at("date", default: "") 발행 · 지은이 #author]
     }
     linebreak()
-    [조판 bookforge · 본문 Noto Serif KR·Libertinus Serif · 표제 Pretendard]
+    [조판 Ian Bookshelf · 본문 Noto Serif KR·Libertinus Serif · 표제 Pretendard]
   })
 }
 
 // ---- 마스터 래퍼 -------------------------------------------------------------
 #let book(meta: (:), tokens: (:), cover: none, toc: true, toc-title: "차 례", body) = {
   let t = TT
-  set document(title: meta.at("title", default: "무제"), author: meta.at("author", default: "bookforge"))
+  set document(title: meta.at("title", default: "무제"), author: meta.at("author", default: "Ian Bookshelf"))
   set page(
     width: t.trim.w, height: t.trim.h,
     margin: (top: t.margin.top, bottom: t.margin.bottom, left: t.margin.left, right: t.margin.right),

@@ -993,6 +993,7 @@ check("J3c 3칸 들여쓰기는 (정본대로) 중첩되지 않는다 — 원고
 print("\n=== K. Academic 학습서 레이아웃 ===")
 _academic_theme = (REPO / "styles/academic/theme.typ").read_text(encoding="utf-8")
 _academic_style = (REPO / "styles/academic/STYLE.md").read_text(encoding="utf-8")
+_qc_gate_source = (REPO / "scripts/qc_gate.py").read_text(encoding="utf-8")
 check("K1 콜아웃 사방 inset 계약",
       "inset: (left: 8pt, right: 8pt, top: 9pt, bottom: 10pt)" in _academic_theme)
 check("K2 콜아웃 제목 10.5pt > 본문 9.5pt + 6pt 간격",
@@ -1003,6 +1004,16 @@ check("K3 short running title 메타 경로",
       and 'fit-trunc(bf-running-title' in _academic_theme)
 check("K4 Academic 자간 상한이 pagination ±0.015em과 일치",
       "+0.015em 초과" in _academic_style and "0em 초과" not in _academic_style)
+check("K5 경고 콜아웃도 본문과 같은 먹색을 쓴다",
+      'fill: ink, label' in _academic_theme and '#8C2B20' not in _academic_theme
+      and "종류와 무관하게 색은 `--ink`로 통일" in _academic_style)
+check("K6 Academic 출판 크레디트 기본값은 Ian Bookshelf다",
+      'meta.at("publisher", default: "Ian Bookshelf")' in _academic_theme
+      and '[조판 Ian Bookshelf' in _academic_theme
+      and 'author: meta.at("author", default: "Ian Bookshelf")' in _academic_theme)
+check("K7 판권면 QC 판별은 특정 브랜드명에 의존하지 않는다",
+      'if "조판" in t and "본문" in t' in _qc_gate_source
+      and 'if "bookforge" in t and "조판" in t' not in _qc_gate_source)
 
 
 print("\n" + "=" * 60)
